@@ -1,0 +1,40 @@
+import { Column, Entity, PrimaryColumn } from 'typeorm';
+
+export type ScanState = 'queued' | 'running' | 'succeeded' | 'failed';
+
+/** Timestamps are ISO-8601 strings so they sort and compare lexicographically. */
+@Entity('scans')
+export class Scan {
+  @PrimaryColumn({ type: 'text' })
+  id: string;
+
+  @Column({ type: 'text' })
+  state: ScanState;
+
+  @Column({ type: 'text' })
+  profile: string;
+
+  @Column({ type: 'text' })
+  model: string;
+
+  @Column({ type: 'text' })
+  language: string;
+
+  @Column({ type: 'text', nullable: true })
+  instructions: string | null;
+
+  @Column({ type: 'integer', default: 0 })
+  attempts: number;
+
+  @Column({ type: 'text' })
+  createdAt: string;
+
+  @Column({ type: 'text', nullable: true })
+  startedAt: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  finishedAt: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  failureReason: string | null;
+}
