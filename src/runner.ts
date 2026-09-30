@@ -34,15 +34,18 @@ export abstract class Runner {
   abstract stop(scanId: string): Promise<void>;
 }
 
-const PLACEHOLDER_REPORT =
-  '# Placeholder Report\n\nThis Scan ran on the fake Runner: no agent looked at the code, and there are no Findings.\n';
+const PLACEHOLDER_SUMMARY = 'This Scan ran on the fake Runner: no agent looked at the code, and there are no Findings.';
+const PLACEHOLDER_REPORT = `# Placeholder Report\n\n${PLACEHOLDER_SUMMARY}\n`;
 
-/** The `fake` Runner: every Attempt writes a placeholder Report and no Findings, without any agent. */
+/**
+ * The `fake` Runner: every Attempt writes a placeholder Report and no Findings, without any agent.
+ * `findings.json` carries the same text as its summary, for profiles with a Report template.
+ */
 export class PlaceholderRunner extends Runner {
   async run(request: AttemptRequest): Promise<AttemptResult> {
     await writeFile(request.transcriptPath, 'fake Runner: no agent ran\n');
     await writeFile(join(request.outputDir, 'report.md'), PLACEHOLDER_REPORT);
-    await writeFile(join(request.outputDir, 'findings.json'), JSON.stringify({ findings: [] }));
+    await writeFile(join(request.outputDir, 'findings.json'), JSON.stringify({ report: { summary: PLACEHOLDER_SUMMARY }, findings: [] }));
     return { exitCode: 0 };
   }
   async stop(): Promise<void> {}

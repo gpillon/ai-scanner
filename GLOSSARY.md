@@ -28,6 +28,10 @@ _Avoid_: Output, result file
 The Artifact that is the Scan's deliverable to the caller, rendered in one or more formats (e.g. Markdown, PDF).
 _Avoid_: Result, deliverable, document
 
+**Report Template**:
+The fixed layout of a Scan Profile's Report, which the server fills from the data the agent writes in `findings.json` (ADR-0005).
+_Avoid_: Report format, skeleton
+
 **Finding**:
 A single issue identified by a Scan, in a structured form shared by all Scan Profiles that produce Findings.
 _Avoid_: Issue, vulnerability, defect

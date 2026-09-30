@@ -10,8 +10,9 @@ This skill is adapted from two MIT-licensed works. Their license texts are in `L
   `references/vuln-categories.md` and `references/vulnerable-packages.md` are vendored unchanged.
 - `SKILL.md` keeps the upstream workflow (scope, dependency audit, secrets scan, deep scan,
   cross-file data flow, self-verification, report) and severity scale, rewritten for a one-shot,
-  read-only, offline Scan: no patch proposals or human approval step, output to `report.md` and
-  `findings.json` in the Findings schema, and hand-offs to the `insecure-defaults`, `sharp-edges`
+  read-only, offline Scan: no patch proposals or human approval step, output to a single
+  `findings.json` holding the Findings and the data of the server's Report template, and
+  hand-offs to the `insecure-defaults`, `sharp-edges`
   and `vulnerability-triage-brocards` skills. `references/report-format.md` is not vendored; the
   Report format is defined in `SKILL.md`.
 

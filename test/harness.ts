@@ -45,7 +45,11 @@ export interface AttemptControl {
 }
 export type Script = (req: AttemptRequest, ctl: AttemptControl) => Promise<AttemptResult | void>;
 
+/** The smallest findings.json the `security` profile's Report template accepts. */
+export const NO_FINDINGS = { report: { summary: 'All good.' }, findings: [] };
+
 export const SAMPLE_FINDINGS = {
+  report: { summary: 'One high-severity Finding.' },
   findings: [
     {
       severity: 'high',
@@ -59,7 +63,7 @@ export const SAMPLE_FINDINGS = {
 
 export const scripts = {
   writeReport:
-    (content = '# Report\n\nAll good.\n', findings: unknown = { findings: [] }): Script =>
+    (content = '# Report\n\nAll good.\n', findings: unknown = NO_FINDINGS): Script =>
     async (req) => {
       await writeFile(join(req.outputDir, 'report.md'), content);
       await writeFile(join(req.outputDir, 'findings.json'), JSON.stringify(findings));

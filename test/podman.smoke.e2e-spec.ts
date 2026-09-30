@@ -187,7 +187,8 @@ const connect = (authority) => new Promise((done) => {
       await h.submit('scripted', { profile: 'security', instructions: 'Focus on "injection" & <tags>' });
       const status = await h.waitForState('scripted', ['succeeded', 'failed'], 5 * MINUTE_MS);
       expect(status).toMatchObject({ state: 'succeeded', attempts: 1 });
-      expect((await h.api.get('/api/scan/scripted/artifacts/report.md')).text).toMatch(/model mock\.\n\nOne Finding: SQL injection in app\.js/);
+      // The server filled the Report template with the summary the scripted model wrote.
+      expect((await h.api.get('/api/scan/scripted/artifacts/report.md')).text).toContain('Written by model mock. One Finding: SQL injection in app.js.');
       expect((await h.api.get('/api/scan/scripted/artifacts/findings.json')).body.findings[0]).toMatchObject({
         severity: 'high',
         location: { file: 'app.js', line: 4 },
@@ -246,9 +247,10 @@ const connect = (authority) => new Promise((done) => {
 
       const report = (await h.api.get('/api/scan/real/artifacts/report.md')).text;
       expect(looksItalian(report)).toBe(true);
-      expect(report).toMatch(/legacy/i); // the Report says what the caller's instructions left out
 
-      const { findings } = (await h.api.get('/api/scan/real/artifacts/findings.json')).body as { findings: Finding[] };
+      const { report: data, findings } = (await h.api.get('/api/scan/real/artifacts/findings.json')).body as { report: object; findings: Finding[] };
+      // The model says what the caller's instructions left out (report.md also quotes the instructions).
+      expect(JSON.stringify(data)).toMatch(/legacy/i);
       expect(missedPlanted(findings)).toEqual([]);
       expect(findings.filter((f) => findingFile(f).startsWith('legacy/'))).toEqual([]);
       expect(containersOf('real')).toEqual([]);

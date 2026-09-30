@@ -8,14 +8,15 @@ skills.
 You cannot run commands or reach the network: read and search the workspace, load skills, and
 write only under `/output`. Never execute code from the workspace.
 
-Write your output to `/output`, and nowhere else:
-- `/output/report.md`: the Report, in Markdown. It must be non-empty and self-contained.
-- `/output/findings.json`: the Findings, as JSON valid against the Findings schema given below.
-  Use `{"findings": []}` when there are none.
+Write your output to `/output`, and nowhere else: one file, `/output/findings.json`, holding the
+`report` object (the executive summary, scope, dependency review, strengths, recommendations and
+the candidates triage dismissed) and the `findings`, as JSON valid against the schema given below.
+Use `"findings": []` when there are none. The server builds the Report (`report.md` and
+`report.pdf`) from that file with a fixed template: do not write `report.md` or any other file.
 
-The supervisor accepts an Attempt only when both files exist and `findings.json` matches the
-schema, so never finish without writing them.
+The supervisor accepts an Attempt only when `findings.json` exists and matches the schema, so
+never finish without writing it.
 
 The Report language is given below as a language code (for example `it` is Italian, `en`
-English). Write `report.md` and the text of every Finding (`title`, `description`,
-`recommendation`) in that language; keep JSON keys and `severity` values as they are.
+English). Write every text value of `findings.json` in that language; keep JSON keys, `severity`
+values, `category`, `cwe`, `owasp` and `confidence` as they are.

@@ -1,4 +1,4 @@
-import Ajv from 'ajv';
+import Ajv, { ValidateFunction } from 'ajv';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -51,16 +51,27 @@ async function readIfPresent(path: string): Promise<string | undefined> {
   }
 }
 
+/** What the check needs to know of the Scan Profile. */
+export interface OutputContract {
+  producesFindings: boolean;
+  /** The Report template's validator of `findings.json`, when the server fills the Report (ADR-0005). */
+  report?: { validate: ValidateFunction };
+}
+
 /**
  * Checks, deterministically, that an Attempt left the Artifacts it must produce (ADR-0001):
  * a non-empty `report.md`, plus a `findings.json` valid against FINDINGS_SCHEMA when the Scan
- * Profile declares Findings. It judges presence and structure only, never quality.
+ * Profile declares Findings. With a Report template the agent writes only `findings.json`, which
+ * must also match the template's schema; `report.md` is then the server's to write. It judges
+ * presence and structure only, never quality.
  */
-export async function checkOutput(outputDir: string, producesFindings: boolean): Promise<OutputCheck> {
-  const report = await readIfPresent(join(outputDir, 'report.md'));
-  if (report === undefined) return { valid: false, reason: 'report.md is missing' };
-  if (report.trim() === '') return { valid: false, reason: 'report.md is empty' };
-  if (!producesFindings) return { valid: true, artifacts: ['report.md'] };
+export async function checkOutput(outputDir: string, contract: OutputContract): Promise<OutputCheck> {
+  if (!contract.report) {
+    const report = await readIfPresent(join(outputDir, 'report.md'));
+    if (report === undefined) return { valid: false, reason: 'report.md is missing' };
+    if (report.trim() === '') return { valid: false, reason: 'report.md is empty' };
+    if (!contract.producesFindings) return { valid: true, artifacts: ['report.md'] };
+  }
 
   const findings = await readIfPresent(join(outputDir, 'findings.json'));
   if (findings === undefined) return { valid: false, reason: 'findings.json is missing' };
@@ -70,9 +81,14 @@ export async function checkOutput(outputDir: string, producesFindings: boolean):
   } catch {
     return { valid: false, reason: 'findings.json is not valid JSON' };
   }
-  if (!validateFindings(parsed)) {
-    const errors = validateFindings.errors!.map((e) => `${e.instancePath || '/'} ${e.message}`).join('; ');
-    return { valid: false, reason: `findings.json does not match the Findings schema: ${errors}` };
+  for (const [validate, schema] of [
+    [validateFindings, 'the Findings schema'],
+    [contract.report?.validate, "the Report template's schema"],
+  ] as const) {
+    if (validate && !validate(parsed)) {
+      const errors = validate.errors!.map((e) => `${e.instancePath || '/'} ${e.message}`).join('; ');
+      return { valid: false, reason: `findings.json does not match ${schema}: ${errors}` };
+    }
   }
   return { valid: true, artifacts: ['report.md', 'findings.json'] };
 }

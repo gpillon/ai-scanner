@@ -1,15 +1,15 @@
 'use strict';
 // A scripted OpenAI-compatible model for the Podman smoke tests and the e2e gate: it makes the
-// agent write /output/report.md, naming the model it was asked for, then /output/findings.json,
-// then stops. Streams, as opencode asks. PORT: where to listen (default 8000).
+// agent write /output/findings.json, whose summary names the model it was asked for, then stops.
+// Streams, as opencode asks. PORT: where to listen (default 8000).
 
 const http = require('node:http');
 
 const steps = (model) => [
-  { filePath: '/output/report.md', content: `# Security Report\n\nWritten by model ${model}.\n\nOne Finding: SQL injection in app.js.\n` },
   {
     filePath: '/output/findings.json',
     content: JSON.stringify({
+      report: { summary: `Written by model ${model}. One Finding: SQL injection in app.js.` },
       findings: [
         {
           severity: 'high',

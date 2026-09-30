@@ -62,9 +62,15 @@ describe('the security Scan Profile', () => {
     });
   });
 
-  it('tells the agent the exact output files the supervisor validates', () => {
-    expect(prompt).toContain('`/output/report.md`');
+  it('tells the agent the one output file the supervisor validates, and that the server writes the Report', () => {
     expect(prompt).toContain('`/output/findings.json`');
+    expect(prompt).toContain('do not write `report.md`');
+  });
+
+  it('has a Report template the server fills', () => {
+    for (const file of ['schema.json', 'report.md.hbs', 'report.typ', 'fonts/Inter_400Regular.ttf', 'fonts/JetBrainsMono_400Regular.ttf']) {
+      expect(existsSync(join(skillsDir, '..', 'report', file))).toBe(true);
+    }
   });
 
   describe('GET /api/profiles', () => {

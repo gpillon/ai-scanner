@@ -1,0 +1,231 @@
+{{!--
+  The standard security Report, filled by the server from the view of findings.json
+  (src/report-template.ts). Headings and fixed text stay in English; the agent's text is in the
+  Scan's language. Every section is always present: missing data reads "Not provided."
+  Helpers: cell (table cell), code (inline code), block (agent Markdown), verbatim (plain text
+  block), fence (code excerpt).
+--}}
+# Security Assessment Report
+
+| | |
+|---|---|
+| **Scan ID** | {{code scan.scanId}} |
+| **Date** | {{scan.date}} |
+| **Scan Profile** | {{cell scan.profile}} |
+| **Model** | {{code scan.model}} |
+| **Report language** | {{cell scan.language}} |
+| **Source Archive SHA-256** | {{code scan.archiveSha256}} |
+| **Files in the Source Archive** | {{scan.files}} |
+| **Overall risk** | **{{risk.label}}** |
+| **Findings** | {{total}} |
+
+> This Report was produced by an AI agent reading the source code. It can contain false positives
+> and miss vulnerabilities: review each Finding before acting on it, and do not read the absence
+> of a Finding as proof of security.
+
+## 1. Executive Summary
+
+{{block summary}}
+
+**Overall risk: {{risk.label}}.**{{#if total}} {{total}} Finding(s) after triage.{{else}} No Finding survived triage.{{/if}}
+
+| Severity | Findings |
+|---|---:|
+{{#each counts}}
+| {{label}} | {{count}} |
+{{/each}}
+| **Total** | **{{total}}** |
+
+## 2. Scope
+
+### 2.1 Target
+
+{{#if scope.description}}{{block scope.description}}{{else}}Not provided.{{/if}}
+
+| | |
+|---|---|
+| **Languages** | {{#if scope.languages.length}}{{cell (join scope.languages)}}{{else}}Not provided.{{/if}} |
+| **Frameworks** | {{#if scope.frameworks.length}}{{cell (join scope.frameworks)}}{{else}}Not provided.{{/if}} |
+
+### 2.2 Entry Points
+
+{{#if scope.entryPoints.length}}
+{{#each scope.entryPoints}}
+- {{cell this}}
+{{/each}}
+{{else}}
+Not provided.
+{{/if}}
+
+### 2.3 Exclusions
+
+{{#if scope.excluded.length}}
+| Path | Reason |
+|---|---|
+{{#each scope.excluded}}
+| {{code path}} | {{cell reason}} |
+{{/each}}
+{{else}}
+None: the whole Source Archive was in scope.
+{{/if}}
+
+### 2.4 Caller Instructions
+
+{{#if scan.instructions}}
+{{verbatim scan.instructions}}
+{{else}}
+None.
+{{/if}}
+
+## 3. Methodology
+
+The review was static and offline: an AI agent read and searched the code, without running it,
+installing anything or reaching the network. It followed a fixed workflow:
+
+1. **Map the codebase**: languages, frameworks, entry points, sources of configuration and secrets.
+2. **Audit the dependencies** against a local watchlist of known-vulnerable versions.
+3. **Sweep for secrets and insecure defaults**: fallback secrets, default credentials, fail-open
+   switches, weak cryptography, permissive access, debug leakage.
+4. **Deep scan** for injection, broken authentication and access control, unsafe data handling,
+   cryptographic misuse and business-logic flaws, and review of misuse-prone APIs.
+5. **Trace data flow across files**, from each entry point to its sinks.
+6. **Triage every candidate** against known false-positive patterns and seven exploitability
+   tests; only candidates with high or medium confidence are kept.
+
+Severities follow the scale in Appendix A. Code excerpts are taken by the server from the
+Source Archive at the reported lines; the marked lines are the ones the Finding points at.
+
+## 4. Findings Overview
+
+{{#if total}}
+| ID | Severity | Title | Location | CWE |
+|---|---|---|---|---|
+{{#each findings}}
+| {{id}} | {{severityLabel}} | {{cell title}} | {{code location}} | {{#if cwe}}{{cell cwe}}{{else}}-{{/if}} |
+{{/each}}
+{{else}}
+No Finding survived triage.
+{{/if}}
+
+## 5. Detailed Findings
+
+{{#each findings}}
+### {{id}}. {{cell title}}
+
+| | |
+|---|---|
+| **Severity** | {{severityLabel}} |
+| **Confidence** | {{#if confidence}}{{cell confidence}}{{else}}Not provided.{{/if}} |
+| **Category** | {{#if category}}{{code category}}{{else}}Not provided.{{/if}} |
+| **CWE** | {{#if cweUrl}}[{{cwe}}]({{cweUrl}}){{else}}{{#if cwe}}{{cell cwe}}{{else}}Not provided.{{/if}}{{/if}} |
+| **OWASP Top 10** | {{#if owasp}}{{cell owasp}}{{else}}Not provided.{{/if}} |
+| **Location** | {{code location}} |
+{{#if otherLocations.length}}
+| **Also at** | {{#each otherLocations}}{{code this}}{{#unless @last}}, {{/unless}}{{/each}} |
+{{/if}}
+
+#### Description
+
+{{block description}}
+
+#### Evidence
+
+{{#if excerpt}}
+{{fence excerpt.lines excerpt.language}}
+{{else}}
+No excerpt: the location has no line, or the file could not be read.
+{{/if}}
+
+#### Attack Scenario
+
+{{#if attackScenario}}{{block attackScenario}}{{else}}Not provided.{{/if}}
+
+#### Impact
+
+{{#if impact}}{{block impact}}{{else}}Not provided.{{/if}}
+
+#### Recommendation
+
+{{#if recommendation}}{{block recommendation}}{{else}}Not provided.{{/if}}
+
+#### References
+
+{{#if cweUrl}}
+- {{cwe}}: <{{cweUrl}}>
+{{/if}}
+{{#each references}}
+- <{{cell this}}>
+{{/each}}
+{{#unless references.length}}{{#unless cweUrl}}
+None.
+{{/unless}}{{/unless}}
+
+{{else}}
+No Finding survived triage.
+{{/each}}
+
+## 6. Dependency Review
+
+| | |
+|---|---|
+| **Manifests read** | {{#if dependencies.manifests.length}}{{#each dependencies.manifests}}{{code this}}{{#unless @last}}, {{/unless}}{{/each}}{{else}}Not provided.{{/if}} |
+
+{{#if dependencies.notes}}{{block dependencies.notes}}{{else}}Not provided.{{/if}}
+
+The dependency check compares versions against a short local watchlist and cannot consult a
+vulnerability database: run a software composition analysis tool for complete coverage.
+
+## 7. Security Strengths
+
+{{#if strengths.length}}
+{{#each strengths}}
+- {{cell this}}
+{{/each}}
+{{else}}
+Not provided.
+{{/if}}
+
+## 8. Strategic Recommendations
+
+{{#if recommendations.length}}
+{{#each recommendations}}
+{{inc @index}}. {{cell this}}
+{{/each}}
+{{else}}
+Not provided.
+{{/if}}
+
+## 9. Triage: Dismissed Candidates
+
+{{#if dismissed.length}}
+| Candidate | Location | Reason for dismissal |
+|---|---|---|
+{{#each dismissed}}
+| {{cell title}} | {{#if location}}{{code location}}{{else}}-{{/if}} | {{cell reason}} |
+{{/each}}
+{{else}}
+None reported.
+{{/if}}
+
+## 10. Limitations
+
+- **Static review only.** Nothing was executed: runtime configuration, deployed infrastructure and
+  behaviour that depends on data were not observed.
+- **Offline.** No vulnerability database or advisory was consulted; known CVEs are reported only
+  when the agent was certain of them.
+- **AI-generated.** Findings can be wrong or incomplete; confidence reflects the agent's own
+  judgement after triage.
+- **Scope.** Only the Source Archive identified by its SHA-256 above was reviewed, minus any
+  exclusions in section 2.3.
+
+## Appendix A. Severity Scale
+
+| Severity | Meaning | Examples |
+|---|---|---|
+| Critical | Exploitable remotely without special conditions; severe impact | SQL injection, RCE, authentication bypass, live cloud credentials committed |
+| High | Clear exploit path with serious impact | Stored XSS, IDOR on sensitive data, hardcoded signing secret |
+| Medium | Exploitable under specific conditions, or by chaining | CSRF, weak password hashing |
+| Low | Real but low direct risk | Verbose errors, missing security headers, outdated dependency with no known exploit |
+| Info | Hardening advice, no direct risk | Defence-in-depth suggestions |
+
+The overall risk is the highest severity among the Findings, ignoring Info; with none it is Minimal.

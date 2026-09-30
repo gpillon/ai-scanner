@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,6 +9,7 @@ import {
   Gate,
   filesOf,
   Harness,
+  makeZip,
   SAMPLE_FINDINGS,
   Script,
   scripts,
@@ -21,6 +23,21 @@ const REPORT = '# Security Report\n\nOne high-severity Finding.\n';
 describe('Scan Supervisor', () => {
   let h: Harness;
   afterEach(() => h?.dispose());
+
+  /** The profiles, plus `markdown`: it has Findings but no Report template, so its agent writes report.md. */
+  let profilesDir: string;
+  beforeAll(async () => {
+    profilesDir = await mkdtemp(join(tmpdir(), 'ai-scanner-profiles-'));
+    await cp(resolve(__dirname, '..', 'profiles'), profilesDir, { recursive: true });
+    await mkdir(join(profilesDir, 'markdown'));
+    await writeFile(
+      join(profilesDir, 'markdown', 'profile.json'),
+      JSON.stringify({ name: 'markdown', description: 'Report written by the agent', producesFindings: true }),
+    );
+    await writeFile(join(profilesDir, 'markdown', 'prompt.md'), 'Review /workspace into /output/report.md and /output/findings.json.\n');
+  });
+  afterAll(() => rm(profilesDir, { recursive: true, force: true }));
+  const MARKDOWN = { profile: 'markdown' };
 
   async function start(config: Parameters<typeof startApp>[0] = {}): Promise<Harness> {
     h = await startApp(config);
@@ -49,12 +66,12 @@ describe('Scan Supervisor', () => {
     });
 
     it('lets a new Attempt finish the partial Artifacts of the previous one', async () => {
-      await start();
+      await start({ config: { profilesDir } });
       h.runner.script = scripts.perAttempt(
         scripts.writeReportOnly(REPORT),
         scripts.writeFindingsText(JSON.stringify(SAMPLE_FINDINGS)),
       );
-      await h.submit('s1');
+      await h.submit('s1', MARKDOWN);
       expect((await h.waitForState('s1', 'succeeded')).attempts).toBe(2);
       expect((await h.api.get('/api/scan/s1/artifacts/report.md')).text).toBe(REPORT);
       expect((await h.api.get('/api/scan/s1/artifacts/findings.json')).body).toEqual(SAMPLE_FINDINGS);
@@ -73,17 +90,19 @@ describe('Scan Supervisor', () => {
       expect(prompts[2]).toBe(prompts[1]);
     });
 
-    it.each<[string, Script, RegExp]>([
-      ['writes nothing', scripts.writeNothing(), /report\.md is missing/],
-      ['writes an empty report.md', scripts.writeEmptyReport(), /report\.md is empty/],
-      ['writes a report.md of only whitespace', scripts.writeReportOnly(' \n\t\n'), /report\.md is empty/],
+    it.each<[string, Script, RegExp, string?]>([
+      ['writes nothing', scripts.writeNothing(), /findings\.json is missing/],
+      ['writes nothing, without a Report template', scripts.writeNothing(), /report\.md is missing/, 'markdown'],
+      ['writes an empty report.md', scripts.writeEmptyReport(), /report\.md is empty/, 'markdown'],
+      ['writes a report.md of only whitespace', scripts.writeReportOnly(' \n\t\n'), /report\.md is empty/, 'markdown'],
       ['crashes', scripts.crash(), /crashed/],
       ['exits non-zero, even with valid Artifacts', scripts.exit(1), /exited with code 1/],
       ['writes no findings.json', scripts.writeReportOnly(), /findings\.json is missing/],
-    ])('fails after 3 Attempts when every Attempt %s', async (_name, script, reason) => {
-      await start();
+      ['writes no findings.json, without a Report template', scripts.writeReportOnly(), /findings\.json is missing/, 'markdown'],
+    ])('fails after 3 Attempts when every Attempt %s', async (_name, script, reason, profile = 'security') => {
+      await start({ config: { profilesDir } });
       h.runner.script = script;
-      await h.submit('s1');
+      await h.submit('s1', { profile });
       const status = await h.waitForState('s1', 'failed');
       expect(status.attempts).toBe(3);
       expect(status.failureReason).toMatch(/No valid Artifacts after 3 Attempts/);
@@ -290,11 +309,11 @@ describe('Scan Supervisor', () => {
     });
   });
 
-  describe('report.pdf', () => {
-    it('is rendered from report.md, listed and downloadable on a succeeded Scan', async () => {
-      await start();
+  describe('report.pdf, without a Report template', () => {
+    it('is rendered from the report.md the agent wrote, listed and downloadable on a succeeded Scan', async () => {
+      await start({ config: { profilesDir } });
       h.runner.script = scripts.writeReport(REPORT);
-      await h.submit('s1');
+      await h.submit('s1', MARKDOWN);
       expect((await h.waitForState('s1', 'succeeded')).artifacts).toEqual(['findings.json', 'report.md', 'report.pdf']);
       const pdf = await h.download('s1', 'report.pdf');
       expect(pdf.status).toBe(200);
@@ -304,16 +323,16 @@ describe('Scan Supervisor', () => {
     });
 
     it('renders the same report.md to the same bytes, whenever it runs', async () => {
-      await start();
+      await start({ config: { profilesDir } });
       h.runner.script = scripts.writeReport(REPORT);
-      await h.submit('s1');
+      await h.submit('s1', MARKDOWN);
       await h.waitForState('s1', 'succeeded');
       h.clock.advance(3 * 24 * 60 * MINUTE);
       await new Promise((r) => setTimeout(r, 1100)); // PDF dates have one-second precision
-      await h.submit('s2');
+      await h.submit('s2', MARKDOWN);
       await h.waitForState('s2', 'succeeded');
       h.runner.script = scripts.writeReport('# Another Report\n');
-      await h.submit('s3');
+      await h.submit('s3', MARKDOWN);
       await h.waitForState('s3', 'succeeded');
 
       const [one, two, other] = await Promise.all(['s1', 's2', 's3'].map((id) => h.download(id, 'report.pdf')));
@@ -322,7 +341,7 @@ describe('Scan Supervisor', () => {
     });
 
     it('renders a Report using the whole Markdown syntax', async () => {
-      await start();
+      await start({ config: { profilesDir } });
       const rich = [
         '# Title',
         'Text with **bold**, *italics*, `code`, [a link](https://example.com), ~~struck~~ and <b>html</b>.',
@@ -337,10 +356,146 @@ describe('Scan Supervisor', () => {
         ...Array.from({ length: 80 }, (_, i) => `Paragraph ${i} ` + 'lorem ipsum '.repeat(20)),
       ].join('\n\n');
       h.runner.script = scripts.writeReport(rich);
-      await h.submit('s1');
+      await h.submit('s1', MARKDOWN);
       await h.waitForState('s1', 'succeeded');
       const pdf = await h.download('s1', 'report.pdf');
       expect(pdf.body.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+    });
+  });
+
+  describe('the Report template', () => {
+    const source = makeZip({ 'src/db.js': Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n') + '\n' });
+    const data = (findings: object[], report: object = { summary: 'Two problems.' }) => JSON.stringify({ report, findings });
+    const finding = (over: object) => ({ ...SAMPLE_FINDINGS.findings[0], ...over });
+
+    async function scan(json: string, id = 's1'): Promise<string> {
+      h.runner.script = scripts.writeFindingsText(json);
+      await h.submit(id, { profile: 'security' }, source);
+      await h.waitForState(id, 'succeeded');
+      return (await h.api.get(`/api/scan/${id}/artifacts/report.md`)).text;
+    }
+
+    it('fills report.md and report.pdf from findings.json alone', async () => {
+      await start();
+      h.runner.script = scripts.writeFindingsText(data([finding({ location: { file: 'src/db.js', line: 12 } })]));
+      await h.submit('s1', { profile: 'security', language: 'it' }, source);
+      expect((await h.waitForState('s1', 'succeeded')).artifacts).toEqual(['findings.json', 'report.md', 'report.pdf']);
+
+      const md = (await h.api.get('/api/scan/s1/artifacts/report.md')).text;
+      for (const heading of ['# Security Assessment Report', '## 1. Executive Summary', '## 5. Detailed Findings', '## Appendix A. Severity Scale']) {
+        expect(md.split('\n')).toContain(heading);
+      }
+      expect(md).toContain('Two problems.');
+      expect(md).toContain('| **Scan ID** | `s1` |');
+      expect(md).toContain('| **Report language** | it |');
+      expect(md).toContain(`| **Source Archive SHA-256** | \`${createHash('sha256').update(source).digest('hex')}\` |`);
+      expect(md).toContain('| **Overall risk** | **High** |');
+      expect(md).toContain('### F-001. SQL injection');
+      // The evidence is read by the server from the Source Archive, around the reported line.
+      expect(md).toContain(['```javascript', '    10  line 10', '    11  line 11', '>   12  line 12', '    13  line 13', '    14  line 14', '```'].join('\n'));
+
+      const pdf = await h.download('s1', 'report.pdf');
+      expect(pdf.body.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+    });
+
+    it('replaces a report.md the agent wrote', async () => {
+      await start();
+      h.runner.script = scripts.writeReport('# My own report\n', SAMPLE_FINDINGS);
+      await h.submit('s1');
+      await h.waitForState('s1', 'succeeded');
+      const md = (await h.api.get('/api/scan/s1/artifacts/report.md')).text;
+      expect(md).not.toContain('My own report');
+      expect(md).toMatch(/^# Security Assessment Report\n/);
+    });
+
+    it('orders the Findings by severity and numbers them', async () => {
+      await start();
+      const md = await scan(data([finding({ severity: 'info', title: 'Hint' }), finding({ severity: 'critical', title: 'RCE' }), finding({ severity: 'info', title: 'Tip' })]));
+      expect(md).toMatch(/### F-001\. RCE[\s\S]*### F-002\. Hint[\s\S]*### F-003\. Tip/);
+      expect(md).toContain('| **Overall risk** | **Critical** |');
+    });
+
+    it('rates the overall risk Minimal when only Info Findings remain', async () => {
+      await start();
+      expect(await scan(data([finding({ severity: 'info' })]))).toContain('| **Overall risk** | **Minimal** |');
+    });
+
+    it('shows every section, saying what the agent did not provide', async () => {
+      await start();
+      const md = await scan(data([]));
+      expect(md).toContain('No Finding survived triage.');
+      expect(md).toMatch(/## 7\. Security Strengths\n\nNot provided\./);
+      expect(md).toMatch(/## 9\. Triage: Dismissed Candidates\n\nNone reported\./);
+    });
+
+    it('rejects a findings.json without the Report data', async () => {
+      await start({ config: { maxAttempts: 1 } });
+      h.runner.script = scripts.writeFindingsText(JSON.stringify({ findings: [] }));
+      await h.submit('s1');
+      const status = await h.waitForState('s1', 'failed');
+      expect(status.failureReason).toMatch(/findings\.json does not match the Report template's schema: .*report/);
+    });
+
+    it('retries rather than fails when a required text is blank', async () => {
+      await start({ config: { maxAttempts: 2 } });
+      h.runner.script = scripts.perAttempt(
+        scripts.writeFindingsText(data([finding({ title: '  ' })])),
+        scripts.writeFindingsText(data([finding({ title: 'SQL injection' })])),
+      );
+      await h.submit('s1');
+      expect(await h.waitForState('s1', 'succeeded')).toMatchObject({ attempts: 2 });
+    });
+
+    it.each([
+      ['outside the workspace', '../source.zip'],
+      ['absolute', '/etc/passwd'],
+      ['missing', 'src/nope.js'],
+    ])('shows no excerpt of a file %s', async (_name, file) => {
+      await start();
+      const md = await scan(data([finding({ location: { file, line: 1 } })]));
+      expect(md).toContain('No excerpt: the location has no line, or the file could not be read.');
+      expect(md).not.toMatch(/PK\u0003\u0004|root:/);
+    });
+
+    it('keeps the agent text from changing the structure of report.md', async () => {
+      await start();
+      const md = await scan(
+        data([
+          finding({
+            title: 'Pipe | in title\nand a newline <img src=x>',
+            description: 'Opens a fence:\n```\n# Injected heading\n<script>x</script>',
+            recommendation: '# Another heading\n<b>html</b>\n---',
+          }),
+        ]),
+      );
+      expect(md).toContain('### F-001. Pipe \\| in title and a newline \\<img src=x>');
+      expect(md).toContain('| F-001 | High | Pipe \\| in title and a newline \\<img src=x> |');
+      expect(md).not.toMatch(/^# Another heading/m);
+      expect(md).toContain('\\# Another heading\n\\<b>html</b>\n\\---');
+      // The fence the agent left open is closed before the next section: what it holds stays code.
+      expect(md).toContain('Opens a fence:\n```\n# Injected heading\n<script>x</script>\n```\n\n#### Evidence');
+    });
+
+    it('renders the same Scan to the same PDF bytes', async () => {
+      await start();
+      const json = data([finding({ location: { file: 'src/db.js', line: 3 } })]);
+      await scan(json);
+      const one = await h.download('s1', 'report.pdf');
+      expect((await h.api.delete('/api/scan/s1')).status).toBe(204);
+      await scan(json);
+      const two = await h.download('s1', 'report.pdf');
+      expect(two.body.equals(one.body)).toBe(true);
+      await scan(json, 's2');
+      expect((await h.download('s2', 'report.pdf')).body.equals(one.body)).toBe(false);
+    });
+
+    it("tells the agent the Report template's schema", async () => {
+      await start();
+      await h.submit('s1');
+      await h.waitForState('s1', 'succeeded');
+      const prompt = h.runner.calls[0].prompt;
+      expect(prompt).toContain('"title": "Security Findings"');
+      expect(prompt).toMatch(/"required": \[\s*"summary"\s*\]/);
     });
   });
 

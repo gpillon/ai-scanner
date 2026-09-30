@@ -1,6 +1,8 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Repository } from 'typeorm';
 import { ArtifactStore } from './artifact-store';
@@ -10,6 +12,7 @@ import { checkOutput, FINDINGS_SCHEMA } from './output-validator';
 import { paths } from './paths';
 import { ProfileRegistry, ScanProfile } from './profiles';
 import { renderReportPdf } from './report-renderer';
+import { buildReportView, fillMarkdownTemplate, fillPdfTemplate } from './report-template';
 import { AttemptRequest, Runner } from './runner';
 import { Scan } from './scan.entity';
 import { extractSourceArchive, InvalidSourceArchiveError } from './source-archive';
@@ -30,7 +33,7 @@ export function buildPrompt(
   if (profile.producesFindings) {
     parts.push(
       '`/output/findings.json` must be valid against this JSON Schema:\n\n```json\n' +
-        JSON.stringify(FINDINGS_SCHEMA, null, 2) +
+        JSON.stringify(profile.report?.schema ?? FINDINGS_SCHEMA, null, 2) +
         '\n```',
     );
   }
@@ -45,6 +48,16 @@ export function buildPrompt(
     );
   }
   return parts.join('\n\n') + '\n';
+}
+
+async function sha256(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest('hex');
+}
+
+async function countFiles(dir: string): Promise<number> {
+  return (await readdir(dir, { recursive: true, withFileTypes: true })).filter((e) => e.isFile()).length;
 }
 
 function minutes(ms: number): string {
@@ -261,10 +274,10 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
 
         const check = end.problem
           ? { valid: false as const, reason: end.problem }
-          : await checkOutput(outputDir, profile.producesFindings);
+          : await checkOutput(outputDir, profile);
         if (this.lettingGo(id)) return;
         if (scanTimedOut) return await this.fail(id, scanTimeoutReason);
-        if (check.valid) return await this.succeed(id, outputDir, check.artifacts);
+        if (check.valid) return await this.succeed(scan, profile, outputDir, check.artifacts);
         problem = check.reason;
         this.log.warn(`Scan ${id} Attempt ${attempt} left no valid Artifacts: ${problem}`);
       }
@@ -301,14 +314,38 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Renders the PDF, then publishes all Artifacts at once and marks the Scan `succeeded`. */
-  private async succeed(id: string, outputDir: string, artifacts: string[]): Promise<void> {
+  /**
+   * Renders the Report (with a Report template, `report.md` too, from `findings.json`), then
+   * publishes all Artifacts at once and marks the Scan `succeeded`.
+   */
+  private async succeed(scan: Scan, profile: ScanProfile, outputDir: string, artifacts: string[]): Promise<void> {
+    const id = scan.id;
     let pdf: Buffer;
     try {
-      pdf = await renderReportPdf(await readFile(join(outputDir, 'report.md'), 'utf8'));
+      if (profile.report) {
+        const data = JSON.parse(await readFile(join(outputDir, 'findings.json'), 'utf8'));
+        const workspaceDir = paths.workspace(this.config.dataDir, id);
+        const view = await buildReportView(data, {
+          scanId: id,
+          profile: scan.profile,
+          model: scan.model,
+          language: scan.language,
+          startedAt: scan.startedAt ?? scan.createdAt,
+          instructions: scan.instructions,
+          attempts: (await this.scans.findOneBy({ id }))?.attempts ?? 1,
+          archiveSha256: await sha256(paths.sourceArchive(this.config.dataDir, id)),
+          files: await countFiles(workspaceDir),
+          workspaceDir,
+        });
+        // Whatever the agent may have written there, report.md is the server's (ADR-0005).
+        await writeFile(join(outputDir, 'report.md'), fillMarkdownTemplate(profile.report, view));
+        pdf = fillPdfTemplate(profile.report, view);
+      } else {
+        pdf = await renderReportPdf(await readFile(join(outputDir, 'report.md'), 'utf8'));
+      }
     } catch (e) {
-      this.log.error(`Scan ${id}: rendering report.pdf failed: ${(e as Error)?.stack ?? e}`);
-      return this.fail(id, 'Could not render report.pdf from report.md');
+      this.log.error(`Scan ${id}: rendering the Report failed: ${(e as Error)?.stack ?? e}`);
+      return this.fail(id, profile.report ? 'Could not render the Report from findings.json' : 'Could not render report.pdf from report.md');
     }
     const pdfPath = paths.renderedPdf(this.config.dataDir, id);
     await writeFile(pdfPath, pdf);

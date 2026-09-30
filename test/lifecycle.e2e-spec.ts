@@ -1,4 +1,4 @@
-import { FakeRunner, Harness, listFiles, scripts, startApp, waitUntil } from './harness';
+import { FakeRunner, Harness, listFiles, NO_FINDINGS, scripts, startApp, waitUntil } from './harness';
 
 describe('Scan lifecycle', () => {
   let h: Harness;
@@ -36,13 +36,12 @@ describe('Scan lifecycle', () => {
 
   describe('Artifacts', () => {
     it('downloads report.md with the Markdown content type', async () => {
-      h.runner.script = scripts.writeReport('# Findings\n\nNone.\n');
       await h.submit('s1');
       await h.waitForState('s1', 'succeeded');
       const res = await h.api.get('/api/scan/s1/artifacts/report.md');
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toBe('text/markdown; charset=utf-8');
-      expect(res.text).toBe('# Findings\n\nNone.\n');
+      expect(res.text).toMatch(/^# Security Assessment Report\n/);
     });
 
     it('downloads findings.json with the JSON content type', async () => {
@@ -51,7 +50,7 @@ describe('Scan lifecycle', () => {
       const res = await h.api.get('/api/scan/s1/artifacts/findings.json');
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toBe('application/json; charset=utf-8');
-      expect(res.body).toEqual({ findings: [] });
+      expect(res.body).toEqual(NO_FINDINGS);
     });
 
     it.each(['..%2F..%2Fscanner.sqlite', 'source.zip', 'other.txt'])('gives 404 for %s', async (name) => {

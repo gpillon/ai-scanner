@@ -22,7 +22,10 @@ describe('Runner selection', () => {
       await h.submit('s1');
       expect((await h.waitForState('s1', 'succeeded')).artifacts).toEqual(['findings.json', 'report.md', 'report.pdf']);
       expect((await h.api.get('/api/scan/s1/artifacts/report.md')).text).toMatch(/fake Runner/);
-      expect((await h.api.get('/api/scan/s1/artifacts/findings.json')).body).toEqual({ findings: [] });
+      expect((await h.api.get('/api/scan/s1/artifacts/findings.json')).body).toEqual({
+        report: { summary: expect.stringMatching(/fake Runner/) },
+        findings: [],
+      });
     });
   });
 });

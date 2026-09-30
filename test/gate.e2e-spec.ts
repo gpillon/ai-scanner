@@ -377,11 +377,15 @@ const waitForContainer = (scanId: string) =>
 
       const report = (await s.server.request('GET', '/api/scan/vulnerable-app/artifacts/report.md')).text;
       expect(looksItalian(report)).toBe(true);
-      expect(report).toMatch(/legacy/i); // the Report says what the caller's instructions left out
       const pdf = await s.server.request('GET', '/api/scan/vulnerable-app/artifacts/report.pdf');
       expect(pdf.bytes.subarray(0, 5).toString()).toBe('%PDF-');
 
-      const { findings } = (await s.server.request('GET', '/api/scan/vulnerable-app/artifacts/findings.json')).body as { findings: Finding[] };
+      const { report: data, findings } = (await s.server.request('GET', '/api/scan/vulnerable-app/artifacts/findings.json')).body as {
+        report: object;
+        findings: Finding[];
+      };
+      // The model says what the caller's instructions left out (report.md also quotes the instructions).
+      expect(JSON.stringify(data)).toMatch(/legacy/i);
       expect(missedPlanted(findings)).toEqual([]);
       expect(findings.filter((f) => findingFile(f).startsWith('legacy/'))).toEqual([]);
     }, 60 * MINUTE_MS);

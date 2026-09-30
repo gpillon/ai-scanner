@@ -10,3 +10,4 @@ We chose this so behaviour changes happen in skills, not server code, and so the
 
 - A `failed` Scan exposes only its failure reason. Partial Artifacts and the agent transcript are kept internally for debugging and never served to the caller: a half-written Report mistaken for a complete one is worse than no Report.
 - Improving Report quality means changing skills or prompts, never adding heuristics to the server.
+- A Scan Profile with a Report Template narrows this contract: the agent writes only `findings.json`, and the server fills `report.md` and the PDF from it (ADR-0005).

@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Security Findings",
+  "description": "What the agent writes to /output/findings.json. The server fills the Report template with it: the agent never writes report.md. Only `report.summary` and the Finding fields shared by every profile are required, but every field below has a place in the Report and shows as 'Not provided' when missing.",
+  "type": "object",
+  "required": ["report", "findings"],
+  "properties": {
+    "report": {
+      "type": "object",
+      "required": ["summary"],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1, "pattern": "\\S",
+          "description": "Executive summary for a non-specialist reader, 3 to 6 sentences: what the application is, the overall security posture, the most serious problems and what to fix first."
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "description": { "type": "string", "description": "What the reviewed codebase is and does." },
+            "languages": { "type": "array", "items": { "type": "string" } },
+            "frameworks": { "type": "array", "items": { "type": "string" } },
+            "entryPoints": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Attack surface: routes, CLIs, jobs, consumers, each with whether it needs authentication, e.g. 'GET /notes (authenticated)'."
+            },
+            "excluded": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["path", "reason"],
+                "properties": { "path": { "type": "string" }, "reason": { "type": "string" } }
+              },
+              "description": "Paths not reviewed, and why (e.g. the caller's instructions, vendored code)."
+            }
+          }
+        },
+        "dependencies": {
+          "type": "object",
+          "properties": {
+            "manifests": { "type": "array", "items": { "type": "string" }, "description": "Manifests and lockfiles read." },
+            "notes": { "type": "string", "description": "Outcome of the dependency audit, in a few sentences." }
+          }
+        },
+        "strengths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Security controls done well, one sentence each (e.g. parameterised queries in the data layer)."
+        },
+        "recommendations": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Strategic next steps beyond the single Findings, most important first."
+        },
+        "dismissed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "reason"],
+            "properties": {
+              "title": { "type": "string" },
+              "location": { "type": "string", "description": "file:line, when there is one" },
+              "reason": { "type": "string", "description": "Why triage dismissed it." }
+            }
+          },
+          "description": "Candidate Findings dismissed during triage."
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "title", "description", "location"],
+        "properties": {
+          "severity": { "enum": ["critical", "high", "medium", "low", "info"] },
+          "title": { "type": "string", "minLength": 1, "pattern": "\\S", "description": "Short, specific: the flaw and where, e.g. 'SQL injection in GET /notes'." },
+          "description": { "type": "string", "minLength": 1, "pattern": "\\S", "description": "The flaw and how an attacker reaches it: source, path through the code, sink." },
+          "location": {
+            "type": "object",
+            "required": ["file"],
+            "properties": {
+              "file": { "type": "string", "minLength": 1, "pattern": "\\S", "description": "Path relative to the workspace root" },
+              "line": { "type": "integer", "minimum": 1, "description": "First line of the vulnerable code" },
+              "endLine": { "type": "integer", "minimum": 1, "description": "Last line of the vulnerable code, when it spans several" }
+            }
+          },
+          "otherLocations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["file"],
+              "properties": { "file": { "type": "string" }, "line": { "type": "integer", "minimum": 1 } }
+            },
+            "description": "Other places with the same root cause."
+          },
+          "category": { "type": "string", "description": "snake_case, e.g. sql_injection" },
+          "cwe": { "type": "string", "description": "The most specific CWE, e.g. CWE-89" },
+          "owasp": { "type": "string", "description": "OWASP Top 10 2021 category, e.g. A03:2021 Injection" },
+          "confidence": { "type": "string", "description": "high or medium" },
+          "attackScenario": { "type": "string", "description": "A concrete exploit: the request or input an attacker sends and what happens." },
+          "impact": { "type": "string", "description": "What the attacker gains: data, privileges, availability." },
+          "recommendation": { "type": "string", "description": "The fix, specific to this code; a short code example when it helps." },
+          "references": { "type": "array", "items": { "type": "string" }, "description": "URLs of relevant standards or advisories." }
+        }
+      }
+    }
+  }
+}

@@ -129,7 +129,7 @@ describe('submitting a Scan', () => {
       const { prompt } = h.runner.calls[0];
       expect(prompt).toContain('Write the Report in this language: it.');
       expect(prompt).toMatch(/<caller-instructions>\nfocus on the auth module\n<\/caller-instructions>/);
-      expect(prompt).toContain('/output/report.md');
+      expect(prompt).toContain('/output/findings.json');
     });
 
     it('does not let instructions close their own delimiter', async () => {

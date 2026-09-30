@@ -1,6 +1,6 @@
 ---
 name: security-review
-description: Method for a security review of a whole codebase that ends in a Report and structured Findings. Load it first in every security Scan; it says when to load the other skills.
+description: Method for a security review of a whole codebase that ends in structured Findings and the data of a standard Report. Load it first in every security Scan; it says when to load the other skills.
 license: MIT (see LICENSE and NOTICE.md)
 ---
 
@@ -23,7 +23,8 @@ through it, understand how its parts interact, and report only what an attacker 
 ## Workflow
 
 Follow the steps in order. Keep a running list of candidate Findings as you go; you judge them in
-step 6.
+step 6. Note as you go what the Report needs besides the Findings: what the codebase is, its
+languages, frameworks and entry points, the manifests you read, and controls it does well.
 
 ### 1. Map the codebase
 
@@ -88,11 +89,12 @@ and for trust boundaries crossed without validation.
 3. Load the **`vulnerability-triage-brocards`** skill and put each remaining candidate through its
    seven tests. Dismiss what fails one.
 4. Keep what survives. Assign the final severity and a confidence (`high` or `medium`); drop
-   anything you would rate low confidence.
+   anything you would rate low confidence. Note every dismissed candidate with the reason: the
+   Report lists them.
 
 ### 7. Write the output
 
-Write both files, even when nothing survived triage. See the output section below.
+Write `findings.json`, even when nothing survived triage. See the output section below.
 
 ## Severity
 
@@ -108,45 +110,65 @@ A missing hardening measure is never above `info` unless you can show a concrete
 
 ## Output
 
-### `findings.json`
-
-One Finding per distinct problem: the same flaw in many places is one Finding per root cause, with
-the other places listed in its description. Besides the required fields, give `category` (short
-snake_case, e.g. `sql_injection`), `confidence` (`high` or `medium`) and `recommendation`.
+You write one file, `/output/findings.json`. The server fills a fixed Report template with it
+(`report.md` and `report.pdf`): headings, the document information, Finding IDs, the severity
+counts, the overall risk and the code excerpts are the server's, so never write `report.md` and
+never repeat those in your text. Every field has a place in the Report; a missing one shows as
+"Not provided", so fill them all.
 
 ```json
 {
+  "report": {
+    "summary": "Notes API is an Express REST service with JWT authentication. Its security posture is poor: an unauthenticated attacker can run commands on the server and read every note. Fix the command injection in /diagnostics/ping and the SQL injection in /notes first.",
+    "scope": {
+      "description": "REST API for personal notes, with attachment upload and a legacy admin console.",
+      "languages": ["JavaScript"],
+      "frameworks": ["Express 4.18", "jsonwebtoken 9"],
+      "entryPoints": ["GET /notes (authenticated)", "GET /diagnostics/ping (unauthenticated)"],
+      "excluded": [{ "path": "vendor/", "reason": "third-party code, excluded by the caller" }]
+    },
+    "dependencies": {
+      "manifests": ["package.json"],
+      "notes": "No lockfile. express 4.18.2 is below 4.19.2 in the watchlist (CVE-2024-29041)."
+    },
+    "strengths": ["Passwords are hashed with bcrypt at cost 12."],
+    "recommendations": ["Use parameterised queries throughout the data layer."],
+    "dismissed": [
+      { "title": "jwt.verify without algorithms", "location": "src/auth.js:12", "reason": "jsonwebtoken 9 rejects alg none" }
+    ]
+  },
   "findings": [
     {
       "severity": "critical",
-      "title": "SQL injection in user lookup",
-      "description": "The `id` query parameter is concatenated into a SQL query. An unauthenticated attacker can send `?id=1 OR 1=1` to read every user row, or stack queries to modify data.",
-      "location": { "file": "src/routes/users.js", "line": 47 },
+      "title": "SQL injection in GET /notes",
+      "description": "The `tag` query parameter is concatenated into the SQL query in `listNotes`, reached from GET /notes without validation.",
+      "location": { "file": "src/server.js", "line": 15, "endLine": 16 },
+      "otherLocations": [{ "file": "src/db.js", "line": 30 }],
       "category": "sql_injection",
+      "cwe": "CWE-89",
+      "owasp": "A03:2021 Injection",
       "confidence": "high",
-      "recommendation": "Use a parameterised query: `db.query('SELECT * FROM users WHERE id = ?', [id])`."
+      "attackScenario": "An authenticated user requests `/notes?tag=' OR 1=1 --` and receives every user's notes.",
+      "impact": "Read and modification of the whole database.",
+      "recommendation": "Use a parameterised query: `db.all('SELECT * FROM notes WHERE owner = ? AND tag = ?', [user, tag])`.",
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     }
   ]
 }
 ```
 
-- `location.file` is relative to `/workspace` (no leading `/workspace/`); `location.line` is the
-  most relevant line, when there is one.
-- `title`, `description` and `recommendation` are written in the Report language. `severity`,
-  `category` and `confidence` stay as given above.
+- `report.summary` is for a non-specialist reader: what the application is, the overall posture,
+  the most serious problems and what to fix first, in 3 to 6 sentences.
+- One Finding per distinct problem: the same flaw in many places is one Finding per root cause,
+  with the other places in `otherLocations`.
+- `location.file` is relative to `/workspace` (no leading `/workspace/`). `location.line` (and
+  `endLine` when the flaw spans lines) must point at the vulnerable code itself: the server shows
+  those lines as the evidence.
+- `cwe` is the most specific CWE you are sure of; `owasp` the OWASP Top 10 2021 category.
+- Text values may use inline Markdown (`code`, **bold**), lists and fenced code blocks; never
+  headings or tables.
+- Every text value is written in the Report language. `severity`, `category`, `cwe`, `owasp` and
+  `confidence` stay as given above.
 
-### `report.md`
-
-Self-contained Markdown, written in the Report language:
-
-1. **Title and summary**: what was reviewed (languages, frameworks, entry points), what was left
-   out and why (for example by the caller's instructions), and the overall assessment in two or
-   three sentences.
-2. **Findings by severity**: a table with the count for each severity.
-3. **Findings**: a table of every Finding (severity, title, `file:line`), then one section per
-   Finding, most severe first, with its location, the evidence (a short code excerpt), the attack
-   scenario, and the fix.
-4. **Scope and limits**: the review is static (nothing was run, nothing was looked up online),
-   the dependency check relies on a local watchlist, and how many candidates triage dismissed.
-
-When no Finding survives, say so plainly and describe what was reviewed.
+When no Finding survives, `findings` is `[]` and `report.summary` says so plainly and describes
+what was reviewed.
