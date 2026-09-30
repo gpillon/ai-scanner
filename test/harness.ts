@@ -315,8 +315,12 @@ export async function startApp(options: {
 }
 
 /** Polls until `condition` holds; for supervisor progress the API does not show. */
-export async function waitUntil(condition: () => boolean | Promise<boolean>, what = 'condition'): Promise<void> {
-  for (let i = 0; i < 300; i++) {
+export async function waitUntil(
+  condition: () => boolean | Promise<boolean>,
+  what = 'condition',
+  timeoutMs = 3000,
+): Promise<void> {
+  for (const deadline = Date.now() + timeoutMs; Date.now() < deadline; ) {
     if (await condition()) return;
     await new Promise((r) => setTimeout(r, 10));
   }

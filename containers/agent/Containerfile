@@ -7,6 +7,7 @@ FROM docker.io/library/node:22-slim
 ARG OPENCODE_VERSION=1.18.33
 
 # ripgrep backs opencode's grep and glob tools; installed here since opencode cannot download it.
+# git is deliberately absent: a Source Archive's .git/config (hooks, fsmonitor) must never run.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ripgrep ca-certificates \
  && rm -rf /var/lib/apt/lists/* \

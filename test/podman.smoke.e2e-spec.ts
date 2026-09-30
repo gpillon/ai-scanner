@@ -141,10 +141,28 @@ const connect = (authority) => new Promise((done) => {
       expect(skills).not.toContain('planted');
     });
 
+    it('removes agent containers left by a previous process as soon as it starts', async () => {
+      const orphan = spawnSync(podman!.executable, ['run', '--detach', '--label', `${SCAN_LABEL}=orphan`, podman!.proxyImage, 'sleep', '600'], {
+        encoding: 'utf8',
+      });
+      expect(orphan.status).toBe(0);
+      h = await startApp({ runner: 'configured', config: overrides });
+      await waitUntil(() => containersOf('orphan').length === 0, 'the orphan container to go', MINUTE_MS);
+    });
+
+    it('removes the container of an Attempt stopped at the Attempt timeout', async () => {
+      h = await startApp({ runner: new ProbeRunner(runnerConfig, 'setTimeout(() => {}, 10 * 60 * 1000)'), config: overrides });
+      await h.submit('slow');
+      await waitUntil(() => containersOf('slow').length === 1, 'the agent container', MINUTE_MS);
+      h.clock.advance(overrides.attemptTimeoutMs!);
+      expect((await h.waitForState('slow', 'failed', MINUTE_MS)).failureReason).toMatch(/timed out/);
+      expect(containersOf('slow')).toEqual([]);
+    });
+
     it('removes the container of an Attempt stopped by DELETE', async () => {
       h = await startApp({ runner: new ProbeRunner(runnerConfig, 'setTimeout(() => {}, 10 * 60 * 1000)'), config: overrides });
       await h.submit('del');
-      await waitUntil(() => containersOf('del').length === 1, 'the agent container');
+      await waitUntil(() => containersOf('del').length === 1, 'the agent container', MINUTE_MS);
       expect((await h.api.delete('/api/scan/del')).status).toBe(204);
       expect(containersOf('del')).toEqual([]);
     });
@@ -182,14 +200,30 @@ const connect = (authority) => new Promise((done) => {
       expect(containersOf('scripted')).toEqual([]);
     });
 
-    it('keeps the API keys in the agent environment out of reach of its read tool', async () => {
+    it('writes the Artifacts when the Source Archive is a git repository', async () => {
+      // Callers often zip a checkout. The image has no git, so opencode keeps / as the worktree.
       const model: ModelEntry = { id: 'mock', provider: 'mockllm', baseUrl: `http://${MOCK}:8000/v1` };
       h = await startApp({ runner: 'configured', config: smokeConfig({ models: [model], defaultModel: model.id, maxAttempts: 1 }) });
-      // The scripted model reads /proc/self/environ and copies the result into report.md.
+      const repo = makeZip({
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.git/config': '[core]\n\trepositoryformatversion = 0\n\tbare = false\n',
+        '.git/objects/': '',
+        '.git/refs/heads/': '',
+        'app.js': 'console.log(1)\n',
+      });
+      await h.submit('git', { profile: 'security' }, repo);
+      expect(await h.waitForState('git', ['succeeded', 'failed'], 5 * MINUTE_MS)).toMatchObject({ state: 'succeeded' });
+    });
+
+    it('keeps the API keys in the agent environment out of reach of its read and grep tools', async () => {
+      const model: ModelEntry = { id: 'mock', provider: 'mockllm', baseUrl: `http://${MOCK}:8000/v1` };
+      h = await startApp({ runner: 'configured', config: smokeConfig({ models: [model], defaultModel: model.id, maxAttempts: 1 }) });
+      // The scripted model reads and greps /proc, then copies the three results into report.md.
       await h.submit('leak', { profile: 'security', instructions: 'LEAK-PROBE' });
       await h.waitForState('leak', ['succeeded', 'failed'], 5 * MINUTE_MS);
       const report = await readFile(join(paths.output(h.dataDir, 'leak'), 'report.md'), 'utf8');
       expect(report).toMatch(/^leaked: /);
+      expect(report.split('---')).toHaveLength(3);
       expect(report).not.toContain(process.env[CANARY]);
     });
   });

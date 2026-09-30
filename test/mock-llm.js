@@ -41,12 +41,15 @@ http
         chunk({}, 'tool_calls');
       };
       const messages = body.messages || [];
-      // Caller instructions containing LEAK-PROBE play a prompt injection: read the process
-      // environment, which holds the API keys, and copy whatever came back into the Report.
+      // Caller instructions containing LEAK-PROBE play a prompt injection: read and search the
+      // process environment, which holds the API keys, and copy whatever came back into the Report.
       if (JSON.stringify(messages).includes('LEAK-PROBE')) {
         const text = (m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+        const results = messages.filter((m) => m.role === 'tool').map(text);
         if (done === 0) call('read', { filePath: '/proc/self/environ' });
-        else if (done === 1) call('write', { filePath: '/output/report.md', content: `leaked: ${text(messages.at(-1))}` });
+        else if (done === 1) call('grep', { pattern: 'canary', path: '/proc/self' });
+        else if (done === 2) call('grep', { pattern: 'canary', path: '/proc/1' });
+        else if (done === 3) call('write', { filePath: '/output/report.md', content: `leaked: ${results.join('\n---\n')}` });
         else {
           chunk({ role: 'assistant', content: 'Done.' });
           chunk({}, 'stop');

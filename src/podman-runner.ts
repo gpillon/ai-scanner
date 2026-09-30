@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Logger, OnModuleInit } from '@nestjs/common';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -101,7 +101,7 @@ function opencodeConfig(model: ModelEntry, withSkills: boolean): object {
       task: 'deny',
       question: 'deny',
       doom_loop: 'deny',
-      // Relative to the worktree: `/`, or /workspace when the Source Archive is a git repository.
+      // Relative to the worktree: `/`, or /workspace should opencode ever see a git repository there.
       edit: { '*': 'deny', 'output/*': 'allow', '../output/*': 'allow' },
       external_directory: { '*': 'deny', [`${IN_CONTAINER.output}/*`]: 'allow', [`${IN_CONTAINER.skills}/*`]: 'allow' },
     },
@@ -119,7 +119,7 @@ interface RunningAttempt {
  * the container has no capabilities and reaches the network only through the egress proxy,
  * which lets through the Model Pool's endpoints and nothing else.
  */
-export class PodmanRunner extends Runner {
+export class PodmanRunner extends Runner implements OnModuleInit {
   private readonly log = new Logger(PodmanRunner.name);
   private readonly podman: PodmanConfig;
   private readonly models: Map<string, ModelEntry>;
@@ -138,11 +138,7 @@ export class PodmanRunner extends Runner {
     const attempt: RunningAttempt = { container: `ai-scanner-${request.scanId}-${request.attempt}`, stopped: false };
     this.running.set(request.scanId, attempt); // before any await: see Runner.stop
     try {
-      // A failed preparation is retried by the next Attempt.
-      await (this.ready ??= this.prepare().catch((e) => {
-        this.ready = undefined;
-        throw e;
-      }));
+      await this.prepared();
       const model = this.models.get(request.model);
       if (!model) throw new Error(`Model ${request.model} is not in the Model Pool`);
       await this.withSecrets(model, (envFile) =>
@@ -154,6 +150,19 @@ export class PodmanRunner extends Runner {
       if (this.running.get(request.scanId) === attempt) this.running.delete(request.scanId);
       await this.remove(attempt.container);
     }
+  }
+
+  /** Prepares right away, so containers a crashed process left behind stop now, not at the next Attempt. */
+  onModuleInit(): void {
+    this.prepared().catch((e) => this.log.error(`Could not prepare Podman: ${e.message}`));
+  }
+
+  /** Runs `prepare` once; a failed preparation is retried by the next caller. */
+  private prepared(): Promise<void> {
+    return (this.ready ??= this.prepare().catch((e) => {
+      this.ready = undefined;
+      throw e;
+    }));
   }
 
   async stop(scanId: string): Promise<void> {
