@@ -7,7 +7,7 @@ import { crc32, deflateRawSync } from 'node:zlib';
 import request from 'supertest';
 import { AppModule, configureApp } from '../src/app.module';
 import { Clock, Timer } from '../src/clock';
-import { AppConfig, MINUTE_MS } from '../src/config';
+import { AppConfig, loadConfig, MINUTE_MS } from '../src/config';
 import { AttemptRequest, AttemptResult, Runner } from '../src/runner';
 import { RetentionSweeper } from '../src/retention-sweeper';
 
@@ -196,6 +196,7 @@ export function makeZip(entries: Record<string, string | ZipEntry> = { 'src/inde
 
 export interface Harness {
   app: INestApplication;
+  /** Not wired into the app when it runs another Runner. */
   runner: FakeRunner;
   clock: FakeClock;
   dataDir: string;
@@ -206,7 +207,7 @@ export interface Harness {
   /** supertest against the app, no token. */
   anonymous: () => ReturnType<typeof request>;
   submit(id: string, fields?: Record<string, string>, archive?: Buffer | null, filename?: string): request.Test;
-  waitForState(id: string, states: string | string[]): Promise<any>;
+  waitForState(id: string, states: string | string[], timeoutMs?: number): Promise<any>;
   /** Downloads an Artifact as raw bytes. */
   download(id: string, name: string): Promise<{ status: number; contentType: string; body: Buffer }>;
   /** Stops the app but keeps the data directory (to test restarts). */
@@ -239,6 +240,8 @@ export function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}):
     maxArchiveBytes: 1024 * 1024,
     maxExtractedBytes: 64 * 1024,
     maxExtractedFiles: 20,
+    runner: 'fake',
+    podman: loadConfig({ SCANNER_TOKEN: TOKEN, SCANNER_MODELS: '[{"id":"m","provider":"anthropic"}]' }).podman,
     maxInstructionsLength: 200,
     retentionDays: 365,
     sweepIntervalMs: 0,
@@ -252,15 +255,17 @@ export function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}):
 
 export async function startApp(options: {
   dataDir?: string;
-  runner?: FakeRunner;
+  /** `configured` runs the Runner the config selects instead of a FakeRunner. */
+  runner?: Runner | 'configured';
   clock?: FakeClock;
   config?: Partial<AppConfig>;
 } = {}): Promise<Harness> {
   const dataDir = options.dataDir ?? (await mkdtemp(join(tmpdir(), 'ai-scanner-')));
-  const runner = options.runner ?? new FakeRunner();
+  const runner = options.runner instanceof FakeRunner ? options.runner : new FakeRunner();
+  const override = options.runner === 'configured' ? undefined : (options.runner ?? runner);
   const clock = options.clock ?? new FakeClock();
   const config = testConfig(dataDir, options.config);
-  const app = await NestFactory.create(AppModule.register(config, { runner, clock }), { logger: false });
+  const app = await NestFactory.create(AppModule.register(config, { runner: override, clock }), { logger: false });
   configureApp(app);
   await app.init();
   const api = authed(app);
@@ -280,9 +285,9 @@ export async function startApp(options: {
       if (archive) req.attach('file', archive, filename);
       return req;
     },
-    async waitForState(id, states) {
+    async waitForState(id, states, timeoutMs = 2000) {
       const wanted = Array.isArray(states) ? states : [states];
-      for (let i = 0; i < 200; i++) {
+      for (const deadline = Date.now() + timeoutMs; Date.now() < deadline; ) {
         const res = await api.get(`/api/scan/${id}`);
         if (res.status === 200 && wanted.includes(res.body.state)) return res.body;
         await new Promise((r) => setTimeout(r, 10));

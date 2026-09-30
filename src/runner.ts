@@ -1,3 +1,6 @@
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 export interface AttemptRequest {
   scanId: string;
   attempt: number;
@@ -9,6 +12,9 @@ export interface AttemptRequest {
   transcriptPath: string;
   prompt: string;
   profile: string;
+  /** The Scan Profile's skills directory, when it has one. */
+  skillsDir?: string;
+  /** Model Pool id. */
   model: string;
 }
 
@@ -17,7 +23,7 @@ export interface AttemptResult {
   exitCode: number;
 }
 
-/** Runs one Attempt of the agent. Adapters: Podman/opencode (later), a fake in tests. */
+/** Runs one Attempt of the agent. Adapters: Podman/opencode, and a fake without any agent. */
 export abstract class Runner {
   abstract run(request: AttemptRequest): Promise<AttemptResult>;
   /**
@@ -28,10 +34,16 @@ export abstract class Runner {
   abstract stop(scanId: string): Promise<void>;
 }
 
-/** Placeholder until the Podman/opencode Runner exists. Every Attempt fails. */
-export class UnconfiguredRunner extends Runner {
-  async run(): Promise<AttemptResult> {
-    throw new Error('No Runner configured');
+export const PLACEHOLDER_REPORT =
+  '# Placeholder Report\n\nThis Scan ran on the fake Runner: no agent looked at the code, and there are no Findings.\n';
+
+/** The `fake` Runner: every Attempt writes a placeholder Report and no Findings, without any agent. */
+export class PlaceholderRunner extends Runner {
+  async run(request: AttemptRequest): Promise<AttemptResult> {
+    await writeFile(request.transcriptPath, 'fake Runner: no agent ran\n');
+    await writeFile(join(request.outputDir, 'report.md'), PLACEHOLDER_REPORT);
+    await writeFile(join(request.outputDir, 'findings.json'), JSON.stringify({ findings: [] }));
+    return { exitCode: 0 };
   }
   async stop(): Promise<void> {}
 }

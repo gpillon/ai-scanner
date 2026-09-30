@@ -11,7 +11,8 @@ import { ModelPool } from './model-pool';
 import { paths } from './paths';
 import { ProfileRegistry } from './profiles';
 import { RetentionSweeper } from './retention-sweeper';
-import { Runner, UnconfiguredRunner } from './runner';
+import { PodmanRunner } from './podman-runner';
+import { PlaceholderRunner, Runner } from './runner';
 import { Scan } from './scan.entity';
 import { ScansService } from './scans.service';
 import { ScanSupervisor } from './supervisor';
@@ -20,6 +21,15 @@ import { ArchiveUploadInterceptor } from './upload.interceptor';
 export interface AppOverrides {
   runner?: Runner;
   clock?: Clock;
+}
+
+function createRunner(config: AppConfig): Runner {
+  switch (config.runner) {
+    case 'fake':
+      return new PlaceholderRunner();
+    case 'podman':
+      return new PodmanRunner(config);
+  }
 }
 
 @Module({})
@@ -41,7 +51,7 @@ export class AppModule {
         { provide: APP_CONFIG, useValue: config },
         { provide: APP_GUARD, useClass: BearerGuard },
         { provide: Clock, useValue: overrides.clock ?? new SystemClock() },
-        { provide: Runner, useValue: overrides.runner ?? new UnconfiguredRunner() },
+        { provide: Runner, useValue: overrides.runner ?? createRunner(config) },
         { provide: ArtifactStore, useValue: new LocalFolderArtifactStore(paths.artifacts(config.dataDir)) },
         ArchiveUploadInterceptor,
         ProfileRegistry,

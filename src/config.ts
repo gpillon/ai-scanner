@@ -11,8 +11,30 @@ export interface ModelEntry {
   baseUrl?: string;
 }
 
+export const RUNNER_KINDS = ['podman', 'fake'] as const;
+export type RunnerKind = (typeof RUNNER_KINDS)[number];
+
+/** How the Podman Runner runs agent containers (ADR-0003). */
+export interface PodmanConfig {
+  /** The `podman` executable. */
+  executable: string;
+  /** Image with opencode installed, built from `containers/agent`. */
+  agentImage: string;
+  /** Image with Node, running the egress proxy from `containers/egress-proxy`. */
+  proxyImage: string;
+  /** Names of server environment variables passed to the agent, such as model API keys. */
+  agentEnv: string[];
+  /** `host:port` endpoints the agent may reach besides those of the Model Pool. */
+  extraEgress: string[];
+  /** Memory limit of each agent container, in podman's syntax (e.g. `4g`). */
+  memory: string;
+}
+
 export interface AppConfig {
   token: string;
+  /** `podman` runs the agent in a container per Attempt; `fake` writes a placeholder Report. */
+  runner: RunnerKind;
+  podman: PodmanConfig;
   dataDir: string;
   profilesDir: string;
   models: ModelEntry[];
@@ -56,6 +78,10 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return n;
 }
 
+function list(value: string | undefined): string[] {
+  return (value ?? '').split(',').map((v) => v.trim()).filter(Boolean);
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const token = env.SCANNER_TOKEN;
   if (!token) throw new Error('SCANNER_TOKEN is required');
@@ -66,8 +92,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error('SCANNER_MODELS must be non-empty and contain SCANNER_DEFAULT_MODEL');
   }
 
+  const runner = (env.SCANNER_RUNNER || 'podman') as RunnerKind;
+  if (!RUNNER_KINDS.includes(runner)) {
+    throw new Error(`SCANNER_RUNNER must be one of ${RUNNER_KINDS.join(', ')}: ${env.SCANNER_RUNNER}`);
+  }
+
   return {
     token,
+    runner,
+    podman: {
+      executable: env.SCANNER_PODMAN || 'podman',
+      agentImage: env.SCANNER_AGENT_IMAGE || 'localhost/ai-scanner-agent:latest',
+      proxyImage: env.SCANNER_EGRESS_PROXY_IMAGE || 'docker.io/library/node:22-alpine',
+      agentEnv: list(env.SCANNER_AGENT_ENV),
+      extraEgress: list(env.SCANNER_EGRESS_ALLOW),
+      memory: env.SCANNER_AGENT_MEMORY || '4g',
+    },
     dataDir: resolve(env.SCANNER_DATA_DIR ?? 'data'),
     profilesDir: resolve(env.SCANNER_PROFILES_DIR ?? resolve(__dirname, '..', 'profiles')),
     models,

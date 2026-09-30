@@ -1,0 +1,16 @@
+# The agent image the Podman Runner starts for each Attempt (ADR-0003):
+#   podman build -t localhost/ai-scanner-agent:latest containers/agent
+# The container runs with a read-only root filesystem, no capabilities and no direct network,
+# so everything opencode needs at runtime must be installed here.
+FROM docker.io/library/node:22-slim
+
+ARG OPENCODE_VERSION=1.18.33
+
+# ripgrep backs opencode's grep and glob tools; installed here since opencode cannot download it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ripgrep ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g "opencode-ai@${OPENCODE_VERSION}" \
+ && npm cache clean --force
+
+WORKDIR /workspace

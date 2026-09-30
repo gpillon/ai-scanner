@@ -8,9 +8,11 @@ export interface ScanProfile {
   description: string;
   producesFindings: boolean;
   promptTemplate: string;
+  /** Directory of the agent skills the profile brings, one `<skill>/SKILL.md` each; absent when it has none. */
+  skillsDir?: string;
 }
 
-/** Server-owned Scan Profiles, loaded from `profiles/<name>/{profile.json,prompt.md}` (ADR-0004). */
+/** Server-owned Scan Profiles, loaded from `profiles/<name>/{profile.json,prompt.md,skills/}` (ADR-0004). */
 @Injectable()
 export class ProfileRegistry {
   private readonly profiles = new Map<string, ScanProfile>();
@@ -25,6 +27,7 @@ export class ProfileRegistry {
         description: meta.description,
         producesFindings: Boolean(meta.producesFindings),
         promptTemplate: readFileSync(join(dir, 'prompt.md'), 'utf8'),
+        skillsDir: existsSync(join(dir, 'skills')) ? join(dir, 'skills') : undefined,
       });
     }
   }

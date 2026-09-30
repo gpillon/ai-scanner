@@ -251,6 +251,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
             transcriptPath,
             prompt: buildPrompt(profile, scan, attempt),
             profile: scan.profile,
+            skillsDir: profile.skillsDir,
             model: scan.model,
           },
           scanTimer,
