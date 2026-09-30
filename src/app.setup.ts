@@ -29,7 +29,13 @@ export function configureApp(app: INestApplication): void {
  */
 function serveUi(app: NestExpressApplication, uiDir: string | undefined): void {
   if (!uiDir || !existsSync(join(uiDir, 'index.html'))) return;
-  app.useStaticAssets(uiDir, { prefix: '/ui/' });
+  app.useStaticAssets(uiDir, {
+    prefix: '/ui/',
+    // Vite names assets by content hash, so they never change; index.html names the current
+    // ones, so browsers must check it on every load or they keep a page whose assets are gone.
+    setHeaders: (res, path) =>
+      res.setHeader('Cache-Control', /[\\/]assets[\\/]/.test(path) ? 'public, max-age=31536000, immutable' : 'no-cache'),
+  });
   const http = app.getHttpAdapter();
   http.get('/', (_req, res) => http.redirect(res, 302, '/ui/'));
 }

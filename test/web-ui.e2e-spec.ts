@@ -26,6 +26,12 @@ describe('web UI', () => {
     expect((await h.anonymous().get('/ui/assets/app.js')).status).toBe(200);
   });
 
+  it('makes browsers recheck index.html but keep hashed assets', async () => {
+    h = await startApp({ config: { uiDir } });
+    expect((await h.anonymous().get('/ui/')).headers['cache-control']).toBe('no-cache');
+    expect((await h.anonymous().get('/ui/assets/app.js')).headers['cache-control']).toBe('public, max-age=31536000, immutable');
+  });
+
   it('is where / redirects', async () => {
     h = await startApp({ config: { uiDir } });
     const res = await h.anonymous().get('/');
