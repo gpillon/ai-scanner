@@ -1,8 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { AppConfig, ModelEntry, PodmanConfig } from './config';
 import { AttemptRequest, AttemptResult, Runner } from './runner';
 
@@ -17,14 +16,17 @@ export const SCAN_LABEL = 'ai-scanner.scan';
 
 const PROXY_SCRIPT = resolve(__dirname, '..', 'containers', 'egress-proxy', 'proxy.js');
 
-/** Where providers without a `baseUrl` in the Model Pool send their requests. */
+/**
+ * Providers opencode ships with, and where they send requests unless the Model Pool gives a
+ * `baseUrl`. Any other provider is treated as OpenAI-compatible: opencode bundles that SDK,
+ * whereas others would be downloaded at runtime, which the egress proxy forbids.
+ */
 const PROVIDER_ENDPOINTS: Record<string, string> = {
   anthropic: 'api.anthropic.com:443',
   openai: 'api.openai.com:443',
   google: 'generativelanguage.googleapis.com:443',
   mistral: 'api.mistral.ai:443',
   groq: 'api.groq.com:443',
-  deepseek: 'api.deepseek.com:443',
   xai: 'api.x.ai:443',
   openrouter: 'openrouter.ai:443',
 };
@@ -44,36 +46,56 @@ export function modelEndpoint(model: ModelEntry): string {
 const IN_CONTAINER = {
   workspace: '/workspace',
   output: '/output',
-  config: '/etc/ai-scanner/opencode.json',
+  skills: '/skills',
   home: '/home/agent',
-  skills: '/home/agent/.config/opencode/skills',
 };
 
 /**
  * The opencode configuration of an Attempt: the chosen model, and tools limited to reading the
- * workspace and writing to /output. No shell, no web access.
+ * workspace and the skills, and writing under /output. Every rule resolves to allow or deny:
+ * `opencode run` rejects what would ask, and ends the Attempt.
  */
-export function opencodeConfig(model: ModelEntry): object {
+export function opencodeConfig(model: ModelEntry, withSkills: boolean): object {
+  const ref = `${model.provider}/${model.id}`;
+  const builtIn = model.provider in PROVIDER_ENDPOINTS;
+  const options = {
+    ...(model.baseUrl && { baseURL: model.baseUrl }),
+    ...(model.apiKeyEnv && { apiKey: `{env:${model.apiKeyEnv}}` }),
+  };
   return {
     $schema: 'https://opencode.ai/config.json',
-    model: `${model.provider}/${model.id}`,
-    ...(model.baseUrl && {
-      provider: {
-        [model.provider]: {
-          ...(PROVIDER_ENDPOINTS[model.provider] ? {} : { npm: '@ai-sdk/openai-compatible' }),
-          options: { baseURL: model.baseUrl },
-          models: { [model.id]: {} },
-        },
-      },
-    }),
+    model: ref,
+    small_model: ref,
+    enabled_providers: [model.provider],
+    provider: {
+      [model.provider]: builtIn
+        ? { options }
+        : { npm: '@ai-sdk/openai-compatible', name: model.provider, options, models: { [model.id]: { tool_call: true } } },
+    },
+    ...(withSkills && { skills: { paths: [IN_CONTAINER.skills] } }),
     autoupdate: false,
     share: 'disabled',
+    snapshot: false,
+    lsp: false,
+    formatter: false,
     permission: {
+      '*': 'deny',
+      invalid: 'allow', // opencode's reply to a malformed tool call; `*` would hide it
+      read: 'allow',
+      glob: 'allow',
+      grep: 'allow',
+      list: 'allow',
+      skill: 'allow',
+      todowrite: 'allow',
       bash: 'deny',
       webfetch: 'deny',
       websearch: 'deny',
-      edit: { '*': 'deny', [`${IN_CONTAINER.output}/**`]: 'allow' },
-      external_directory: { '*': 'deny', [`${IN_CONTAINER.output}/**`]: 'allow' },
+      task: 'deny',
+      question: 'deny',
+      doom_loop: 'deny',
+      // Relative to the worktree: `/`, or /workspace when the Source Archive is a git repository.
+      edit: { '*': 'deny', 'output/*': 'allow', '../output/*': 'allow' },
+      external_directory: { '*': 'deny', [`${IN_CONTAINER.output}/*`]: 'allow', [`${IN_CONTAINER.skills}/*`]: 'allow' },
     },
   };
 }
@@ -115,10 +137,7 @@ export class PodmanRunner extends Runner {
       }));
       const model = this.models.get(request.model);
       if (!model) throw new Error(`Model ${request.model} is not in the Model Pool`);
-      const configPath = join(dirname(request.transcriptPath), 'opencode.json');
-      await writeFile(configPath, JSON.stringify(opencodeConfig(model), null, 2));
-
-      await this.exec(['create', ...this.containerArgs(request, attempt.container, configPath, model)]);
+      await this.exec(['create', ...this.containerArgs(request, attempt.container, model)]);
       if (attempt.stopped) return { exitCode: 137 };
       return { exitCode: await this.startAttached(attempt.container, request.transcriptPath) };
     } finally {
@@ -134,14 +153,21 @@ export class PodmanRunner extends Runner {
     await this.remove(attempt.container);
   }
 
-  private containerArgs(request: AttemptRequest, name: string, configPath: string, model: ModelEntry): string[] {
+  private containerArgs(request: AttemptRequest, name: string, model: ModelEntry): string[] {
     const proxy = `http://${PROXY_CONTAINER}:${PROXY_PORT}`;
     const env: Record<string, string> = {
       HOME: IN_CONTAINER.home,
-      OPENCODE_CONFIG: IN_CONTAINER.config,
-      OPENCODE_DISABLE_AUTOUPDATE: 'true',
-      OPENCODE_DISABLE_MODELS_FETCH: 'true',
-      OPENCODE_DISABLE_LSP_DOWNLOAD: 'true',
+      // Merged last, over any configuration opencode finds; and the Source Archive's own
+      // opencode.json, .opencode/, AGENTS.md and skills are never loaded.
+      OPENCODE_CONFIG_CONTENT: JSON.stringify(opencodeConfig(model, Boolean(request.skillsDir))),
+      OPENCODE_DISABLE_PROJECT_CONFIG: '1',
+      OPENCODE_DISABLE_EXTERNAL_SKILLS: '1',
+      OPENCODE_DISABLE_CLAUDE_CODE: '1',
+      OPENCODE_PURE: '1',
+      OPENCODE_DISABLE_AUTOUPDATE: '1',
+      OPENCODE_DISABLE_MODELS_FETCH: '1',
+      OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
+      OPENCODE_DISABLE_SHARE: '1',
       HTTPS_PROXY: proxy,
       HTTP_PROXY: proxy,
       https_proxy: proxy,
@@ -161,20 +187,23 @@ export class PodmanRunner extends Runner {
       '--user', '0:0', // rootless: the invoking user on the host, so /output stays writable
       '--volume', `${request.workspaceDir}:${IN_CONTAINER.workspace}:ro`,
       '--volume', `${request.outputDir}:${IN_CONTAINER.output}:rw`,
-      '--volume', `${configPath}:${IN_CONTAINER.config}:ro`,
       '--workdir', IN_CONTAINER.workspace,
     ];
     if (request.skillsDir) args.push('--volume', `${request.skillsDir}:${IN_CONTAINER.skills}:ro`);
     for (const [key, value] of Object.entries(env)) args.push('--env', `${key}=${value}`);
     // Name only: podman copies the value from its own environment, so secrets stay off the command line.
-    for (const key of this.podman.agentEnv) args.push('--env', key);
+    for (const key of new Set([...this.podman.agentEnv, ...(model.apiKeyEnv ? [model.apiKeyEnv] : [])])) {
+      args.push('--env', key);
+    }
     args.push(this.podman.agentImage, ...this.agentCommand(request, model));
     return args;
   }
 
   /** The command the agent container runs. */
   protected agentCommand(request: AttemptRequest, model: ModelEntry): string[] {
-    return ['opencode', 'run', '--model', `${model.provider}/${model.id}`, request.prompt];
+    // --title skips a title-generation call; stdin is not attached, so nothing joins the prompt.
+    const ref = `${model.provider}/${model.id}`;
+    return ['opencode', 'run', '--format', 'json', '--title', request.scanId, '--dir', IN_CONTAINER.workspace, '--model', ref, request.prompt];
   }
 
   /**
@@ -193,7 +222,7 @@ export class PodmanRunner extends Runner {
     }
     await this.remove(PROXY_CONTAINER);
     await this.exec([
-      'run', '--detach', '--name', PROXY_CONTAINER,
+      'run', '--detach', '--restart', 'always', '--name', PROXY_CONTAINER,
       '--network', `${EGRESS_NETWORK},${AGENT_NETWORK}`,
       '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
       '--volume', `${PROXY_SCRIPT}:/proxy.js:ro`,

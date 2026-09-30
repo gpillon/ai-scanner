@@ -9,6 +9,8 @@ export interface ModelEntry {
   id: string;
   provider: string;
   baseUrl?: string;
+  /** Server environment variable holding the API key, for providers opencode does not know. */
+  apiKeyEnv?: string;
 }
 
 export const RUNNER_KINDS = ['podman', 'fake'] as const;

@@ -35,14 +35,19 @@ function createProxy(allowList) {
       { host: target.hostname, port: target.port || 80, method: req.method, path: target.pathname + target.search, headers: req.headers },
       (up) => {
         res.writeHead(up.statusCode, up.headers);
+        up.on('error', () => res.destroy());
         up.pipe(res);
       },
     );
-    upstream.on('error', () => res.headersSent ? res.destroy() : res.writeHead(502).end('upstream error\n'));
+    upstream.on('error', () => (res.headersSent ? res.destroy() : res.writeHead(502).end('upstream error\n')));
+    req.on('error', () => upstream.destroy());
+    res.on('error', () => upstream.destroy());
     req.pipe(upstream);
   });
 
   server.on('connect', (req, socket, head) => {
+    // The socket is ours from here on, errors included: one left unhandled would end the proxy.
+    socket.on('error', () => socket.destroy());
     const match = /^(\[[^\]]+\]|[^:]+):(\d+)$/.exec(req.url);
     if (!match || !allowed.has(endpoint(match[1], match[2]))) {
       socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
@@ -58,6 +63,7 @@ function createProxy(allowList) {
     socket.on('error', () => upstream.destroy());
   });
 
+  server.on('clientError', (_e, socket) => socket.destroy());
   return server;
 }
 
@@ -65,6 +71,8 @@ module.exports = { createProxy };
 
 if (require.main === module) {
   const allow = (process.env.ALLOW || '').split(',').map((e) => e.trim()).filter(Boolean);
-  const port = Number(process.env.PORT || 3128);
-  createProxy(allow).listen(port, () => console.log(`egress proxy on :${port}, allowing ${allow.join(', ') || 'nothing'}`));
+  const server = createProxy(allow);
+  server.listen(Number(process.env.PORT || 3128), () =>
+    console.log(`egress proxy on :${server.address().port}, allowing ${allow.join(', ') || 'nothing'}`),
+  );
 }
