@@ -66,9 +66,9 @@ export function App() {
           </PageToggleButton>
         </MastheadToggle>
         <MastheadBrand>
-          <MastheadLogo component="a" href={href({ page: 'scans' })}>
+          <MastheadLogo component="a" href={href({ page: 'scans' })} className="app-logo">
             <Title headingLevel="h1" size="xl" className="app-brand">
-              <ShieldAltIcon /> ai-scanner
+              <ShieldAltIcon /> AI Scanner
             </Title>
           </MastheadLogo>
         </MastheadBrand>

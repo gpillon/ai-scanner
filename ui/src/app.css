@@ -1,3 +1,10 @@
+/* The masthead logo is a block sized for an image: centre the text title on the toggle's axis. */
+.app-logo {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 .app-brand {
   display: inline-flex;
   align-items: center;

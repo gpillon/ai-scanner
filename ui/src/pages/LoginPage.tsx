@@ -24,9 +24,9 @@ export function LoginPage({ onToken }: { onToken: (token: string) => void }) {
 
   return (
     <PfLoginPage
-      loginTitle="Sign in to ai-scanner"
+      loginTitle="Sign in to AI Scanner"
       loginSubtitle="Enter the server's bearer token"
-      textContent="ai-scanner runs an AI coding agent on the source code you upload and returns a Report."
+      textContent="AI Scanner runs an AI coding agent on the source code you upload and returns a Report."
     >
       <Form onSubmit={submit}>
         <FormGroup label="Token" isRequired fieldId="token">
