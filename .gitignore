@@ -1,0 +1,77 @@
+# --- Secrets / env ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# --- Runtime data (uploaded zips, agent workspaces, generated artifacts) ---
+# Anchored to repo root so source folders with the same name are not ignored.
+/data/
+/storage/
+/uploads/
+/workspaces/
+/jobs/
+/artifacts/
+/tmp/
+*.zip
+!**/fixtures/**/*.zip
+!**/testdata/**/*.zip
+
+# --- Logs ---
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Node / TypeScript ---
+node_modules/
+dist/
+build/
+out/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+.turbo/
+.cache/
+.eslintcache
+.npm/
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# --- Docker / local infra ---
+docker-compose.override.yml
+.docker-data/
+
+# --- Agent tooling (local-only state; shared config/skills stay tracked) ---
+.claude/settings.local.json
+.claude/worktrees/
+
+# --- Editors / OS ---
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
