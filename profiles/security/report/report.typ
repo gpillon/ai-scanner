@@ -1,5 +1,5 @@
 // The standard security Report as a PDF, the same sections as report.md.hbs, filled by the
-// server with the view of findings.json passed as `sys.inputs.data` (src/report-template.ts).
+// server with the view of findings.json passed as `sys.inputs.data` (src/reports/report-template.ts).
 // The agent's text only ever arrives as data: it is shown as text, never evaluated as markup.
 // Fonts: Inter and JetBrains Mono from fonts/, then the fonts built into Typst; `fallback: false`
 // keeps system fonts out, so every host renders alike.

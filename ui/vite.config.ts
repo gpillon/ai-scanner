@@ -1,7 +1,7 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-// The backend serves the built UI under /ui/ (see configureApp in src/app.module.ts).
+// The backend serves the built UI under /ui/ (see configureApp in src/app.setup.ts).
 // In development Vite serves it and forwards /api to the backend.
 export default defineConfig({
   base: '/ui/',
