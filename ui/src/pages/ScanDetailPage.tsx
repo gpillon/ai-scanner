@@ -1,5 +1,6 @@
 import {
   Alert,
+  Badge,
   Breadcrumb,
   BreadcrumbItem,
   Button,
@@ -29,6 +30,9 @@ import {
   SplitItem,
   Stack,
   StackItem,
+  Tab,
+  Tabs,
+  TabTitleText,
   Title,
   Tooltip,
 } from '@patternfly/react-core';
@@ -40,7 +44,7 @@ import { useEffect, useState } from 'react';
 import { api, ApiError, saveBlob, type ScanStatus } from '../api';
 import { ActivityLog } from '../components/ActivityLog';
 import { formatTime, isActive, ScanStateLabel } from '../components/ScanStateLabel';
-import { href, navigate } from '../router';
+import { href, navigate, scanRoute, type ScanTab } from '../router';
 
 const POLL_MS = 3000;
 
@@ -72,7 +76,7 @@ const sortArtifacts = (names: string[]) => {
   return [...names].sort((a, b) => rank(a) - rank(b));
 };
 
-export function ScanDetailPage({ id }: { id: string }) {
+export function ScanDetailPage({ id, tab }: { id: string; tab: ScanTab }) {
   const [scan, setScan] = useState<ScanStatus>();
   const [error, setError] = useState<{ status?: number; message: string }>();
   const [findings, setFindings] = useState<Findings>();
@@ -204,146 +208,173 @@ export function ScanDetailPage({ id }: { id: string }) {
               </Alert>
             </StackItem>
           )}
-
           <StackItem>
-            <Gallery hasGutter minWidths={{ default: '100%', lg: '420px' }}>
-              <Card isFullHeight>
-                <CardTitle>Details</CardTitle>
-                <CardBody>
-                  {!scan ? (
-                    <Skeleton height="160px" screenreaderText="Loading" />
-                  ) : (
-                    <DescriptionList isHorizontal isCompact>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>Profile</DescriptionListTerm>
-                        <DescriptionListDescription>{scan.profile}</DescriptionListDescription>
-                      </DescriptionListGroup>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>Model</DescriptionListTerm>
-                        <DescriptionListDescription>{scan.model}</DescriptionListDescription>
-                      </DescriptionListGroup>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>Language</DescriptionListTerm>
-                        <DescriptionListDescription>{scan.language}</DescriptionListDescription>
-                      </DescriptionListGroup>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>Attempts</DescriptionListTerm>
-                        <DescriptionListDescription>{scan.attempts}</DescriptionListDescription>
-                      </DescriptionListGroup>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>Created</DescriptionListTerm>
-                        <DescriptionListDescription>{formatTime(scan.createdAt)}</DescriptionListDescription>
-                      </DescriptionListGroup>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>Started</DescriptionListTerm>
-                        <DescriptionListDescription>{formatTime(scan.startedAt)}</DescriptionListDescription>
-                      </DescriptionListGroup>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>Finished</DescriptionListTerm>
-                        <DescriptionListDescription>{formatTime(scan.finishedAt)}</DescriptionListDescription>
-                      </DescriptionListGroup>
-                    </DescriptionList>
-                  )}
-                </CardBody>
-              </Card>
+            <Tabs activeKey={tab} onSelect={(_e, key) => navigate(scanRoute(id, key as ScanTab))} aria-label="Scan">
+              <Tab eventKey="overview" title={<TabTitleText>Overview</TabTitleText>}>
+                <div className="app-tab-body">
+                  <Gallery hasGutter minWidths={{ default: '100%', lg: '420px' }}>
+                    <Card isFullHeight>
+                      <CardTitle>Details</CardTitle>
+                      <CardBody>
+                        {!scan ? (
+                          <Skeleton height="160px" screenreaderText="Loading" />
+                        ) : (
+                          <DescriptionList isHorizontal isCompact>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Profile</DescriptionListTerm>
+                              <DescriptionListDescription>{scan.profile}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Model</DescriptionListTerm>
+                              <DescriptionListDescription>{scan.model}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Language</DescriptionListTerm>
+                              <DescriptionListDescription>{scan.language}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Attempts</DescriptionListTerm>
+                              <DescriptionListDescription>{scan.attempts}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Created</DescriptionListTerm>
+                              <DescriptionListDescription>{formatTime(scan.createdAt)}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Started</DescriptionListTerm>
+                              <DescriptionListDescription>{formatTime(scan.startedAt)}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Finished</DescriptionListTerm>
+                              <DescriptionListDescription>{formatTime(scan.finishedAt)}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                          </DescriptionList>
+                        )}
+                      </CardBody>
+                    </Card>
 
-              <Card isFullHeight>
-                <CardTitle>Artifacts</CardTitle>
-                <CardBody>
-                  {!scan ? (
-                    <Skeleton height="160px" screenreaderText="Loading" />
-                  ) : scan.state !== 'succeeded' ? (
-                    <Content component="p">
-                      {isActive(scan.state)
-                        ? 'The Report will be available here when the Scan succeeds. This page refreshes on its own.'
-                        : 'A failed Scan has no Artifacts.'}
-                    </Content>
-                  ) : (
-                    <Stack hasGutter>
-                      {sortArtifacts(scan.artifacts ?? []).map((name) => (
-                        <StackItem key={name}>
-                          <Button variant="secondary" icon={<DownloadIcon />} onClick={() => download(name)}>
-                            {ARTIFACT_LABELS[name] ?? name}
-                          </Button>
-                        </StackItem>
-                      ))}
-                    </Stack>
-                  )}
-                </CardBody>
-              </Card>
-            </Gallery>
-          </StackItem>
-
-          <StackItem>
-            <ActivityLog scanId={id} onState={setScan} />
-          </StackItem>
-
-          {findings && (
-            <StackItem>
-              <Card>
-                <CardTitle>Findings</CardTitle>
-                <CardBody>
-                  <Stack hasGutter>
-                    {findings.report?.summary && (
-                      <StackItem>
-                        <Content component="p">{findings.report.summary}</Content>
-                      </StackItem>
-                    )}
-                    <StackItem>
-                      <Flex spaceItems={{ default: 'spaceItemsSm' }}>
-                        {counts.map(([severity, n]) => (
-                          <FlexItem key={severity}>
-                            <Label color={SEVERITY_COLOR[severity]} variant={n ? 'filled' : 'outline'}>
-                              {severity}: {n}
-                            </Label>
-                          </FlexItem>
-                        ))}
-                      </Flex>
-                    </StackItem>
-                    {findings.findings?.length ? (
-                      <StackItem>
-                        <Table aria-label="Findings" variant="compact">
-                          <Thead>
-                            <Tr>
-                              <Th width={10}>Severity</Th>
-                              <Th>Finding</Th>
-                              <Th width={25}>Location</Th>
-                            </Tr>
-                          </Thead>
-                          <Tbody>
-                            {[...findings.findings]
-                              .sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity))
-                              .map((f, i) => (
-                                <Tr key={i}>
-                                  <Td dataLabel="Severity">
-                                    <Label color={SEVERITY_COLOR[f.severity] ?? 'grey'}>{f.severity}</Label>
-                                  </Td>
-                                  <Td dataLabel="Finding">
-                                    <ExpandableSection toggleText={f.title} isIndented>
-                                      {f.description}
-                                    </ExpandableSection>
-                                  </Td>
-                                  <Td dataLabel="Location">
-                                    <code>
-                                      {f.location?.file ?? '—'}
-                                      {f.location?.line ? `:${f.location.line}` : ''}
-                                    </code>
-                                  </Td>
-                                </Tr>
+                    <Card isFullHeight>
+                      <CardTitle>Artifacts</CardTitle>
+                      <CardBody>
+                        {!scan ? (
+                          <Skeleton height="160px" screenreaderText="Loading" />
+                        ) : scan.state !== 'succeeded' ? (
+                          <Content component="p">
+                            {isActive(scan.state)
+                              ? 'The Report will be available here when the Scan succeeds. This page refreshes on its own.'
+                              : 'A failed Scan has no Artifacts.'}
+                          </Content>
+                        ) : (
+                          <Stack hasGutter>
+                            {sortArtifacts(scan.artifacts ?? []).map((name) => (
+                              <StackItem key={name}>
+                                <Button variant="secondary" icon={<DownloadIcon />} onClick={() => download(name)}>
+                                  {ARTIFACT_LABELS[name] ?? name}
+                                </Button>
+                              </StackItem>
+                            ))}
+                          </Stack>
+                        )}
+                      </CardBody>
+                    </Card>
+                  </Gallery>
+                </div>
+              </Tab>
+              <Tab
+                eventKey="findings"
+                title={
+                  <TabTitleText>
+                    Findings{' '}
+                    {findings?.findings && <Badge isRead>{findings.findings.length}</Badge>}
+                  </TabTitleText>
+                }
+              >
+                <div className="app-tab-body">
+                  {findings ? (
+                    <Card>
+                      <CardBody>
+                        <Stack hasGutter>
+                          {findings.report?.summary && (
+                            <StackItem>
+                              <Content component="p">{findings.report.summary}</Content>
+                            </StackItem>
+                          )}
+                          <StackItem>
+                            <Flex spaceItems={{ default: 'spaceItemsSm' }}>
+                              {counts.map(([severity, n]) => (
+                                <FlexItem key={severity}>
+                                  <Label color={SEVERITY_COLOR[severity]} variant={n ? 'filled' : 'outline'}>
+                                    {severity}: {n}
+                                  </Label>
+                                </FlexItem>
                               ))}
-                          </Tbody>
-                        </Table>
-                      </StackItem>
-                    ) : (
-                      <StackItem>
-                        <Content component="p">No Findings.</Content>
-                      </StackItem>
-                    )}
-                  </Stack>
-                </CardBody>
-              </Card>
-            </StackItem>
-          )}
+                            </Flex>
+                          </StackItem>
+                          {findings.findings?.length ? (
+                            <StackItem>
+                              <Table aria-label="Findings" variant="compact">
+                                <Thead>
+                                  <Tr>
+                                    <Th width={10}>Severity</Th>
+                                    <Th>Finding</Th>
+                                    <Th width={25}>Location</Th>
+                                  </Tr>
+                                </Thead>
+                                <Tbody>
+                                  {[...findings.findings]
+                                    .sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity))
+                                    .map((f, i) => (
+                                      <Tr key={i}>
+                                        <Td dataLabel="Severity">
+                                          <Label color={SEVERITY_COLOR[f.severity] ?? 'grey'}>{f.severity}</Label>
+                                        </Td>
+                                        <Td dataLabel="Finding">
+                                          <ExpandableSection toggleText={f.title} isIndented>
+                                            {f.description}
+                                          </ExpandableSection>
+                                        </Td>
+                                        <Td dataLabel="Location">
+                                          <code>
+                                            {f.location?.file ?? '—'}
+                                            {f.location?.line ? `:${f.location.line}` : ''}
+                                          </code>
+                                        </Td>
+                                      </Tr>
+                                    ))}
+                                </Tbody>
+                              </Table>
+                            </StackItem>
+                          ) : (
+                            <StackItem>
+                              <Content component="p">No Findings.</Content>
+                            </StackItem>
+                          )}
+                        </Stack>
+                      </CardBody>
+                    </Card>
+                  ) : (
+                    <Content component="p">
+                      {scan && isActive(scan.state)
+                        ? 'The Findings appear here when the Scan succeeds.'
+                        : 'This Scan has no Findings.'}
+                    </Content>
+                  )}
+                </div>
+              </Tab>
+              <Tab
+                eventKey="logs"
+                title={
+                  <TabTitleText>
+                    Logs{scan && isActive(scan.state) && <span className="app-live-dot" aria-label="live" />}
+                  </TabTitleText>
+                }
+              >
+                <div className="app-tab-body">
+                  <ActivityLog scanId={id} onState={setScan} />
+                </div>
+              </Tab>
+            </Tabs>
+          </StackItem>
         </Stack>
       </PageSection>
 

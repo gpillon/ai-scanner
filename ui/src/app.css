@@ -48,7 +48,8 @@
 
 /* Activity log of a Scan: one compact row per thing the agent does. */
 .app-activity {
-  max-height: 420px;
+  /* Most of the window, so the Logs tab reads like a terminal. */
+  max-height: max(320px, calc(100vh - 420px));
   overflow-y: auto;
   font-size: var(--pf-t--global--font--size--sm);
   line-height: 1.5;
@@ -141,4 +142,37 @@
   .app-live::before {
     animation: none;
   }
+}
+
+/* Scan page tabs. */
+.app-tab-body {
+  padding-top: var(--pf-t--global--spacer--md);
+}
+
+.app-live-dot {
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-left: 0.4em;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: var(--pf-t--global--color--status--info--default, #4394e5);
+  animation: app-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-live-dot {
+    animation: none;
+  }
+}
+
+/* "New Scan" is the main action: brand colour and weight set it apart from the other links. */
+.app-nav-new {
+  --pf-v6-c-nav__link--Color: var(--pf-t--global--color--brand--default);
+  --pf-v6-c-nav__link--hover--Color: var(--pf-t--global--color--brand--hover);
+  --pf-v6-c-nav__link--m-current--Color: var(--pf-t--global--color--brand--default);
+  --pf-v6-c-nav__link-icon--Color: var(--pf-t--global--color--brand--default);
+  --pf-v6-c-nav__link--BorderColor: var(--pf-t--global--color--brand--default);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  margin-bottom: var(--pf-t--global--spacer--sm);
 }

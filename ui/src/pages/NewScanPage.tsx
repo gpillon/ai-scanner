@@ -24,7 +24,7 @@ import {
 import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, SCAN_ID_PATTERN, type Model, type Profile } from '../api';
-import { navigate } from '../router';
+import { navigate, scanRoute } from '../router';
 
 /** Random, so callers never pick the same id by chance. */
 const newScanId = (): string => crypto.randomUUID();
@@ -66,7 +66,7 @@ export function NewScanPage() {
     setSubmitError(undefined);
     try {
       const scan = await api.createScan({ id, file, profile, model, language: language.trim(), instructions: instructions.trim() });
-      navigate({ page: 'scan', id: scan.id });
+      navigate(scanRoute(scan.id, 'logs'));
     } catch (e) {
       setSubmitError((e as Error).message);
       setSubmitting(false);

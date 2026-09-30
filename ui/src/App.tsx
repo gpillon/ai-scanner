@@ -20,6 +20,7 @@ import {
   ToolbarItem,
 } from '@patternfly/react-core';
 import BarsIcon from '@patternfly/react-icons/dist/esm/icons/bars-icon';
+import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-icon';
 import ShieldAltIcon from '@patternfly/react-icons/dist/esm/icons/shield-alt-icon';
 import { useEffect, useState } from 'react';
 import { setUnauthorizedHandler, token } from './api';
@@ -94,11 +95,11 @@ export function App() {
       <PageSidebarBody>
         <Nav aria-label="Navigation">
           <NavList>
+            <NavItem to={href({ page: 'new' })} isActive={route.page === 'new'} className="app-nav-new" icon={<PlusCircleIcon />}>
+              New Scan
+            </NavItem>
             <NavItem to={href({ page: 'scans' })} isActive={route.page === 'scans' || route.page === 'scan'}>
               Scans
-            </NavItem>
-            <NavItem to={href({ page: 'new' })} isActive={route.page === 'new'}>
-              New Scan
             </NavItem>
             <NavItem to={href({ page: 'docs' })} isActive={route.page === 'docs'}>
               Documentation
@@ -113,7 +114,7 @@ export function App() {
     <Page masthead={masthead} sidebar={sidebar} isManagedSidebar>
       {route.page === 'new' && <NewScanPage />}
       {route.page === 'scans' && <ScansPage />}
-      {route.page === 'scan' && <ScanDetailPage key={route.id} id={route.id} />}
+      {route.page === 'scan' && <ScanDetailPage key={route.id} id={route.id} tab={route.tab} />}
       {route.page === 'docs' && <DocsPage />}
     </Page>
   );

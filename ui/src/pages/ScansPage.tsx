@@ -19,7 +19,7 @@ import { ActionsColumn, Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/reac
 import { useEffect, useState } from 'react';
 import { api, type ScanStatus } from '../api';
 import { formatTime, ScanStateLabel } from '../components/ScanStateLabel';
-import { href, navigate } from '../router';
+import { href, navigate, scanRoute } from '../router';
 
 /** Other callers start Scans too, so the list refreshes whether or not one is running here. */
 const POLL_MS = 3000;
@@ -117,7 +117,7 @@ export function ScansPage() {
               {shown.map((scan) => (
                 <Tr key={scan.id}>
                   <Td dataLabel="Id">
-                    <a href={href({ page: 'scan', id: scan.id })}>
+                    <a href={href(scanRoute(scan.id))}>
                       <code>{scan.id}</code>
                     </a>
                   </Td>
@@ -130,7 +130,7 @@ export function ScansPage() {
                   <Td dataLabel="Created">{formatTime(scan.createdAt)}</Td>
                   <Td dataLabel="Finished">{formatTime(scan.finishedAt)}</Td>
                   <Td isActionCell>
-                    <ActionsColumn items={[{ title: 'Open', onClick: () => navigate({ page: 'scan', id: scan.id }) }]} />
+                    <ActionsColumn items={[{ title: 'Open', onClick: () => navigate(scanRoute(scan.id)) }]} />
                   </Td>
                 </Tr>
               ))}
