@@ -1,15 +1,17 @@
 import { Logger } from '@nestjs/common';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { AppConfig, ModelEntry, PodmanConfig } from './config';
 import { AttemptRequest, AttemptResult, Runner } from './runner';
 
 /** Agent containers join only this network: it has no route out of the host. */
-export const AGENT_NETWORK = 'ai-scanner-agents';
+const AGENT_NETWORK = 'ai-scanner-agents';
 /** The egress proxy joins this one too, to reach the model endpoints. */
 export const EGRESS_NETWORK = 'ai-scanner-egress';
-export const PROXY_CONTAINER = 'ai-scanner-egress-proxy';
+const PROXY_CONTAINER = 'ai-scanner-egress-proxy';
 const PROXY_PORT = 3128;
 /** Every agent container carries it, with the Scan id as value. */
 export const SCAN_LABEL = 'ai-scanner.scan';
@@ -35,7 +37,8 @@ const PROVIDER_ENDPOINTS: Record<string, string> = {
 export function modelEndpoint(model: ModelEntry): string {
   if (model.baseUrl) {
     const url = new URL(model.baseUrl);
-    return `${url.hostname}:${url.port || (url.protocol === 'http:' ? 80 : 443)}`;
+    // Without the brackets of an IPv6 literal, as the egress proxy compares hosts.
+    return `${url.hostname.replace(/^\[|\]$/g, '')}:${url.port || (url.protocol === 'http:' ? 80 : 443)}`;
   }
   const known = PROVIDER_ENDPOINTS[model.provider];
   if (!known) throw new Error(`Model ${model.id}: provider ${model.provider} needs a baseUrl in SCANNER_MODELS`);
@@ -55,8 +58,13 @@ const IN_CONTAINER = {
  * workspace and the skills, and writing under /output. Every rule resolves to allow or deny:
  * `opencode run` rejects what would ask, and ends the Attempt.
  */
-export function opencodeConfig(model: ModelEntry, withSkills: boolean): object {
-  const ref = `${model.provider}/${model.id}`;
+/** How opencode names the model: `provider/model`. */
+function modelRef(model: ModelEntry): string {
+  return `${model.provider}/${model.id}`;
+}
+
+function opencodeConfig(model: ModelEntry, withSkills: boolean): object {
+  const ref = modelRef(model);
   const builtIn = model.provider in PROVIDER_ENDPOINTS;
   const options = {
     ...(model.baseUrl && { baseURL: model.baseUrl }),
@@ -123,7 +131,7 @@ export class PodmanRunner extends Runner {
     super();
     this.podman = config.podman;
     this.models = new Map(config.models.map((m) => [m.id, m]));
-    this.egress = [...new Set([...config.models.map(modelEndpoint), ...config.podman.extraEgress])];
+    this.egress = [...new Set(config.models.map(modelEndpoint))];
   }
 
   async run(request: AttemptRequest): Promise<AttemptResult> {
@@ -137,7 +145,9 @@ export class PodmanRunner extends Runner {
       }));
       const model = this.models.get(request.model);
       if (!model) throw new Error(`Model ${request.model} is not in the Model Pool`);
-      await this.exec(['create', ...this.containerArgs(request, attempt.container, model)]);
+      await this.withSecrets(model, (envFile) =>
+        this.exec(['create', '--env-file', envFile, ...this.containerArgs(request, attempt.container, model)]),
+      );
       if (attempt.stopped) return { exitCode: 137 };
       return { exitCode: await this.startAttached(attempt.container, request.transcriptPath) };
     } finally {
@@ -191,19 +201,38 @@ export class PodmanRunner extends Runner {
     ];
     if (request.skillsDir) args.push('--volume', `${request.skillsDir}:${IN_CONTAINER.skills}:ro`);
     for (const [key, value] of Object.entries(env)) args.push('--env', `${key}=${value}`);
-    // Name only: podman copies the value from its own environment, so secrets stay off the command line.
-    for (const key of new Set([...this.podman.agentEnv, ...(model.apiKeyEnv ? [model.apiKeyEnv] : [])])) {
-      args.push('--env', key);
-    }
     args.push(this.podman.agentImage, ...this.agentCommand(request, model));
     return args;
+  }
+
+  /**
+   * Hands the agent's secrets (SCANNER_AGENT_ENV and the model's apiKeyEnv) to `use` as an env
+   * file, removed once `use` settles: they stay off the command line, and a remote podman
+   * client (Windows, macOS) would not forward `--env NAME` values from this process.
+   */
+  private async withSecrets<T>(model: ModelEntry, use: (envFile: string) => Promise<T>): Promise<T> {
+    const names = new Set([...this.podman.agentEnv, ...(model.apiKeyEnv ? [model.apiKeyEnv] : [])]);
+    const lines: string[] = [];
+    for (const name of names) {
+      const value = process.env[name];
+      if (value === undefined) this.log.warn(`${name} is not set: the agent will run without it`);
+      else if (/[\r\n]/.test(value)) throw new Error(`${name} spans several lines, which an env file cannot hold`);
+      else lines.push(`${name}=${value}`);
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'ai-scanner-env-'));
+    try {
+      const file = join(dir, 'agent.env');
+      await writeFile(file, lines.map((line) => `${line}\n`).join(''), { mode: 0o600 });
+      return await use(file);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 
   /** The command the agent container runs. */
   protected agentCommand(request: AttemptRequest, model: ModelEntry): string[] {
     // --title skips a title-generation call; stdin is not attached, so nothing joins the prompt.
-    const ref = `${model.provider}/${model.id}`;
-    return ['opencode', 'run', '--format', 'json', '--title', request.scanId, '--dir', IN_CONTAINER.workspace, '--model', ref, request.prompt];
+    return ['opencode', 'run', '--format', 'json', '--title', request.scanId, '--dir', IN_CONTAINER.workspace, '--model', modelRef(model), request.prompt];
   }
 
   /**

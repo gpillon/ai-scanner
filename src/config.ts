@@ -26,8 +26,6 @@ export interface PodmanConfig {
   proxyImage: string;
   /** Names of server environment variables passed to the agent, such as model API keys. */
   agentEnv: string[];
-  /** `host:port` endpoints the agent may reach besides those of the Model Pool. */
-  extraEgress: string[];
   /** Memory limit of each agent container, in podman's syntax (e.g. `4g`). */
   memory: string;
 }
@@ -107,7 +105,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       agentImage: env.SCANNER_AGENT_IMAGE || 'localhost/ai-scanner-agent:latest',
       proxyImage: env.SCANNER_EGRESS_PROXY_IMAGE || 'docker.io/library/node:22-alpine',
       agentEnv: list(env.SCANNER_AGENT_ENV),
-      extraEgress: list(env.SCANNER_EGRESS_ALLOW),
       memory: env.SCANNER_AGENT_MEMORY || '4g',
     },
     dataDir: resolve(env.SCANNER_DATA_DIR ?? 'data'),

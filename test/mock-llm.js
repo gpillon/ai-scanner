@@ -35,11 +35,24 @@ http
         res.write(
           `data: ${JSON.stringify({ id: 'x', object: 'chat.completion.chunk', created: 1, model: 'mock', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`,
         );
-      const step = STEPS[done];
-      if (step && tools.includes('write')) {
-        chunk({ role: 'assistant', tool_calls: [{ index: 0, id: `call_${done}`, type: 'function', function: { name: 'write', arguments: '' } }] });
-        chunk({ tool_calls: [{ index: 0, function: { arguments: JSON.stringify(step) } }] });
+      const call = (name, args) => {
+        chunk({ role: 'assistant', tool_calls: [{ index: 0, id: `call_${done}`, type: 'function', function: { name, arguments: '' } }] });
+        chunk({ tool_calls: [{ index: 0, function: { arguments: JSON.stringify(args) } }] });
         chunk({}, 'tool_calls');
+      };
+      const messages = body.messages || [];
+      // Caller instructions containing LEAK-PROBE play a prompt injection: read the process
+      // environment, which holds the API keys, and copy whatever came back into the Report.
+      if (JSON.stringify(messages).includes('LEAK-PROBE')) {
+        const text = (m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+        if (done === 0) call('read', { filePath: '/proc/self/environ' });
+        else if (done === 1) call('write', { filePath: '/output/report.md', content: `leaked: ${text(messages.at(-1))}` });
+        else {
+          chunk({ role: 'assistant', content: 'Done.' });
+          chunk({}, 'stop');
+        }
+      } else if (STEPS[done] && tools.includes('write')) {
+        call('write', STEPS[done]);
       } else {
         chunk({ role: 'assistant', content: 'Done.' });
         chunk({}, 'stop');

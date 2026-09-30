@@ -36,9 +36,13 @@ function tunnel(proxyPort: number, authority: string): Promise<string> {
 }
 
 /** A plain-HTTP request through the proxy, as a client configured with HTTP_PROXY sends it. */
-function viaProxy(proxyPort: number, url: string): Promise<{ status: number; body: string }> {
+function viaProxy(
+  proxyPort: number,
+  url: string,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port: proxyPort, path: url, headers: { Host: new URL(url).host } }, (res) => {
+    const req = request({ host: '127.0.0.1', port: proxyPort, path: url, headers: { Host: new URL(url).host, ...headers } }, (res) => {
       let body = '';
       res.on('data', (c) => (body += c));
       res.on('end', () => resolve({ status: res.statusCode!, body }));
@@ -56,9 +60,12 @@ describe('egress proxy', () => {
   let proxy: ChildProcess;
 
   beforeAll(async () => {
-    // `/slow` never answers, to leave a request in flight.
+    // `/slow` never answers, to leave a request in flight; `/headers` echoes the request headers.
     const endpoint = (name: string) =>
-      createServer((req, res) => void (req.url === '/slow' || res.end(`hello from ${name}`)));
+      createServer((req, res) => {
+        if (req.url === '/headers') res.end(JSON.stringify(req.headers));
+        else if (req.url !== '/slow') res.end(`hello from ${name}`);
+      });
     servers.push(endpoint('model'), endpoint('elsewhere'));
     [modelPort, otherPort] = await Promise.all(servers.map(listen));
     ({ child: proxy, port: proxyPort } = await startProxy([`127.0.0.1:${modelPort}`]));
@@ -105,6 +112,18 @@ describe('egress proxy', () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(proxy.exitCode).toBeNull();
     expect(await tunnel(proxyPort, `127.0.0.1:${modelPort}`)).toContain('hello from model');
+  });
+
+  it('keeps proxy credentials and hop-by-hop headers from the model endpoint', async () => {
+    const { body } = await viaProxy(proxyPort, `http://127.0.0.1:${modelPort}/headers`, {
+      'Proxy-Authorization': 'Basic c2VjcmV0',
+      'Proxy-Connection': 'keep-alive',
+      Authorization: 'Bearer model-key',
+    });
+    const received = JSON.parse(body);
+    expect(received).not.toHaveProperty('proxy-authorization');
+    expect(received).not.toHaveProperty('proxy-connection');
+    expect(received.authorization).toBe('Bearer model-key');
   });
 
   it('forwards plain HTTP only to an allowed model endpoint', async () => {

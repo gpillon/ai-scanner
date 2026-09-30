@@ -35,7 +35,7 @@ describe('Source Archive extraction', () => {
   describe('when the Scan ends', () => {
     const exists = (path: string) => stat(path).then(() => true, () => false);
 
-    /** What is left on disk of the Scan's customer code and of its debug output. */
+    /** What is left on disk of the caller's code and of what is kept for debugging. */
     async function leftovers(id: string) {
       return {
         sourceArchive: await exists(paths.sourceArchive(h.dataDir, id)),

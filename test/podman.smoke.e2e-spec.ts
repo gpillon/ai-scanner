@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { AppConfig, loadConfig, ModelEntry, MINUTE_MS } from '../src/config';
+import { paths } from '../src/paths';
 import { EGRESS_NETWORK, modelEndpoint, PodmanRunner, SCAN_LABEL } from '../src/podman-runner';
 import { Harness, makeZip, startApp, testConfig, waitUntil } from './harness';
 
@@ -19,8 +20,13 @@ const env: NodeJS.ProcessEnv = { ...process.env, SCANNER_TOKEN: 'smoke' };
 const withModels = enabled && Boolean(process.env.SCANNER_MODELS);
 const podman = enabled ? loadConfig({ ...env, SCANNER_MODELS: env.SCANNER_MODELS ?? '[{"id":"m","provider":"anthropic"}]' }).podman : undefined;
 
+/** A stand-in secret, passed to the agent the way model API keys are. */
+const CANARY = 'SMOKE_CANARY';
+process.env[CANARY] = 'canary-7f3a9c';
+
 function smokeConfig(overrides: Partial<AppConfig> = {}): Partial<AppConfig> {
-  return { runner: 'podman', podman, attemptTimeoutMs: 20 * MINUTE_MS, scanTimeoutMs: 30 * MINUTE_MS, ...overrides };
+  const agentEnv = [...(podman?.agentEnv ?? []), CANARY];
+  return { runner: 'podman', podman: podman && { ...podman, agentEnv }, attemptTimeoutMs: 20 * MINUTE_MS, scanTimeoutMs: 30 * MINUTE_MS, ...overrides };
 }
 
 /** Agent containers of the Scan that still exist. */
@@ -54,6 +60,7 @@ result.readWorkspace = fs.readFileSync('/workspace/src/index.js', 'utf8');
 result.writeWorkspace = tryWrite('/workspace/planted.js');
 result.writeRoot = tryWrite('/usr/local/bin/planted');
 result.writeOutput = tryWrite('/output/probe.txt');
+result.canary = process.env.SMOKE_CANARY;
 result.capabilities = /CapEff:\\s*(\\w+)/.exec(fs.readFileSync('/proc/self/status', 'utf8'))[1];
 const tcp = (host, port) => new Promise((done) => {
   const s = net.connect({ host, port });
@@ -94,12 +101,13 @@ const connect = (authority) => new Promise((done) => {
       // The probe writes no Report, so the Scan fails after its one Attempt.
       await h.submit('iso', { profile: 'security' }, makeZip({ 'src/index.js': 'console.log("hi")\n' }));
       await h.waitForState('iso', 'failed', 5 * MINUTE_MS);
-      const probe = JSON.parse(await readFile(join(h.dataDir, 'scans', 'iso', 'output', 'probe.json'), 'utf8'));
+      const probe = JSON.parse(await readFile(join(paths.output(h.dataDir, 'iso'), 'probe.json'), 'utf8'));
       expect(probe).toEqual({
         readWorkspace: 'console.log("hi")\n',
         writeWorkspace: 'EROFS',
         writeRoot: 'EROFS',
         writeOutput: 'written',
+        canary: process.env[CANARY],
         capabilities: '0000000000000000',
         direct: expect.not.stringMatching(/^connected$/),
         proxyToOther: 'HTTP/1.1 403 Forbidden',
@@ -123,7 +131,7 @@ const connect = (authority) => new Promise((done) => {
       });
       await h.submit('cfg', { profile: 'security' }, hostile);
       await h.waitForState('cfg', 'failed', 5 * MINUTE_MS);
-      const output = join(h.dataDir, 'scans', 'cfg', 'output');
+      const output = paths.output(h.dataDir, 'cfg');
       const text = await readFile(join(output, 'config.json'), 'utf8');
       const loaded = JSON.parse(text.slice(text.indexOf('{')));
       expect(loaded.permission).toMatchObject({ bash: 'deny', webfetch: 'deny', websearch: 'deny' });
@@ -168,10 +176,21 @@ const connect = (authority) => new Promise((done) => {
         severity: 'high',
         location: { file: 'app.js', line: 4 },
       });
-      expect(await readFile(join(h.dataDir, 'scans', 'scripted', 'attempts', '1', 'transcript.log'), 'utf8')).toMatch(
+      expect(await readFile(paths.transcript(h.dataDir, 'scripted', 1), 'utf8')).toMatch(
         /"type":"tool_use"/,
       );
       expect(containersOf('scripted')).toEqual([]);
+    });
+
+    it('keeps the API keys in the agent environment out of reach of its read tool', async () => {
+      const model: ModelEntry = { id: 'mock', provider: 'mockllm', baseUrl: `http://${MOCK}:8000/v1` };
+      h = await startApp({ runner: 'configured', config: smokeConfig({ models: [model], defaultModel: model.id, maxAttempts: 1 }) });
+      // The scripted model reads /proc/self/environ and copies the result into report.md.
+      await h.submit('leak', { profile: 'security', instructions: 'LEAK-PROBE' });
+      await h.waitForState('leak', ['succeeded', 'failed'], 5 * MINUTE_MS);
+      const report = await readFile(join(paths.output(h.dataDir, 'leak'), 'report.md'), 'utf8');
+      expect(report).toMatch(/^leaked: /);
+      expect(report).not.toContain(process.env[CANARY]);
     });
   });
 

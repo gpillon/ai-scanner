@@ -34,7 +34,7 @@ export abstract class Runner {
   abstract stop(scanId: string): Promise<void>;
 }
 
-export const PLACEHOLDER_REPORT =
+const PLACEHOLDER_REPORT =
   '# Placeholder Report\n\nThis Scan ran on the fake Runner: no agent looked at the code, and there are no Findings.\n';
 
 /** The `fake` Runner: every Attempt writes a placeholder Report and no Findings, without any agent. */

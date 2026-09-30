@@ -325,8 +325,8 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Removes the customer's code once the Scan ends (ADR-0003): the Source Archive and the
-   * workspace. The output and transcripts stay, as internal debug output (ADR-0001).
+   * Removes the caller's code once the Scan ends (ADR-0003): the Source Archive and the
+   * workspace. Partial Artifacts and transcripts stay, kept internally for debugging (ADR-0001).
    */
   private async discardSource(id: string): Promise<void> {
     await rm(paths.sourceArchive(this.config.dataDir, id), { force: true });
