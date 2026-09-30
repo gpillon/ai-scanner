@@ -1,0 +1,5 @@
+{
+  "name": "security",
+  "description": "Security review of the codebase: vulnerabilities, unsafe patterns and risky dependencies.",
+  "producesFindings": true
+}
