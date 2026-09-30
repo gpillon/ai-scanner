@@ -132,7 +132,17 @@ Tags: branch name, `sha-<short>`, `latest` on the default branch, and `X.Y.Z` / 
 ## Layout
 
 ```
-src/          NestJS backend
+src/          NestJS backend, one folder per feature module
+  main.ts, app.module.ts, app.setup.ts   bootstrap, root module, pipes/OpenAPI/UI
+  core/       global module: configuration and Clock
+  config/     environment variables to AppConfig
+  common/     bearer guard, Clock, on-disk paths, app root
+  scans/      Scans: controller, service, supervisor, retention, upload, DTOs, entity
+  runner/     Runner port, Podman and fake adapters
+  profiles/   Scan Profiles and GET /api/profiles
+  models/     Model Pool and GET /api/models
+  artifacts/  Artifact store
+  reports/    findings.json checks, Report Template, PDF rendering
 ui/           Web UI (Vite + React + PatternFly)
 profiles/     Scan Profiles: prompt, skills, Report Template
 containers/   Agent image and egress proxy

@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { APP_CONFIG, AppConfig } from './config';
+import { APP_CONFIG, AppConfig } from '../../config/app-config';
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
 

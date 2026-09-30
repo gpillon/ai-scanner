@@ -3,14 +3,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { open, mkdir, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { Repository } from 'typeorm';
-import { ArtifactStore } from './artifact-store';
-import { Clock } from './clock';
-import { APP_CONFIG, AppConfig } from './config';
-import { ModelPool } from './model-pool';
-import { paths } from './paths';
-import { ProfileRegistry } from './profiles';
-import { Scan } from './scan.entity';
-import { ScanSupervisor } from './supervisor';
+import { ArtifactStore } from '../artifacts/artifact-store';
+import { Clock } from '../common/clock';
+import { APP_CONFIG, AppConfig } from '../config/app-config';
+import { ModelPool } from '../models/model-pool.service';
+import { paths } from '../common/paths';
+import { ProfileRegistry } from '../profiles/profile-registry.service';
+import { Scan } from './entities/scan.entity';
+import { ScanSupervisor } from './scan-supervisor.service';
 
 export const SCAN_ID_PATTERN = /^[a-z0-9-]{1,64}$/;
 

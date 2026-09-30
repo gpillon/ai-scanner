@@ -1,4 +1,4 @@
-import { loadConfig } from '../src/config';
+import { loadConfig } from '../src/config/app-config';
 import { Harness, startApp } from './harness';
 
 const BASE_ENV = { SCANNER_TOKEN: 't', SCANNER_MODELS: JSON.stringify([{ id: 'm', provider: 'anthropic' }]) };

@@ -15,9 +15,9 @@
 import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { AppConfig, loadConfig, ModelEntry, MINUTE_MS } from '../src/config';
-import { paths } from '../src/paths';
-import { modelEndpoint, PodmanRunner, SCAN_LABEL } from '../src/podman-runner';
+import { AppConfig, loadConfig, ModelEntry, MINUTE_MS } from '../src/config/app-config';
+import { paths } from '../src/common/paths';
+import { modelEndpoint, PodmanRunner, SCAN_LABEL } from '../src/runner/podman-runner';
 import { Harness, makeZip, startApp, testConfig, waitUntil } from './harness';
 import * as pods from './podman';
 import { Finding, findingFile, fixtureFiles, looksItalian, missedPlanted, VULNERABLE_APP } from './real-scan';

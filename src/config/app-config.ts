@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { APP_ROOT } from '../common/app-root';
 
 export const APP_CONFIG = Symbol('APP_CONFIG');
 
@@ -110,8 +111,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       memory: env.SCANNER_AGENT_MEMORY || '4g',
     },
     dataDir: resolve(env.SCANNER_DATA_DIR ?? 'data'),
-    profilesDir: resolve(env.SCANNER_PROFILES_DIR ?? resolve(__dirname, '..', 'profiles')),
-    uiDir: resolve(env.SCANNER_UI_DIR ?? resolve(__dirname, '..', 'ui', 'dist')),
+    profilesDir: resolve(env.SCANNER_PROFILES_DIR ?? resolve(APP_ROOT, 'profiles')),
+    uiDir: resolve(env.SCANNER_UI_DIR ?? resolve(APP_ROOT, 'ui', 'dist')),
     models,
     defaultModel,
     defaultLanguage: env.SCANNER_DEFAULT_LANGUAGE ?? 'en',

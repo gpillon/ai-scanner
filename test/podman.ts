@@ -1,8 +1,8 @@
 /** Podman helpers for the tests that run real containers: the smoke tests and the e2e gate. */
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { ModelEntry, PodmanConfig } from '../src/config';
-import { EGRESS_NETWORK, SCAN_LABEL } from '../src/podman-runner';
+import { ModelEntry, PodmanConfig } from '../src/config/app-config';
+import { EGRESS_NETWORK, SCAN_LABEL } from '../src/runner/podman-runner';
 
 const SCRIPTED_MODEL_CONTAINER = 'ai-scanner-scripted-llm';
 

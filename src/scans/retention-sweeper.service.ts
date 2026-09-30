@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { Clock } from './clock';
-import { APP_CONFIG, AppConfig, DAY_MS } from './config';
+import { Clock } from '../common/clock';
+import { APP_CONFIG, AppConfig, DAY_MS } from '../config/app-config';
 import { ScansService } from './scans.service';
 
 /** Deletes Scans older than the retention period; an expired Scan behaves like a deleted one. */

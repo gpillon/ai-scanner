@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { APP_CONFIG, AppConfig } from './config';
-import { loadReportTemplate, ReportTemplate } from './report-template';
+import { APP_CONFIG, AppConfig } from '../config/app-config';
+import { loadReportTemplate, ReportTemplate } from '../reports/report-template';
 
 export interface ScanProfile {
   name: string;

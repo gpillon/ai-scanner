@@ -15,8 +15,8 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { loadConfig, ModelEntry, MINUTE_MS } from '../src/config';
-import { paths } from '../src/paths';
+import { loadConfig, ModelEntry, MINUTE_MS } from '../src/config/app-config';
+import { paths } from '../src/common/paths';
 import { filesOf, makeZip, waitUntil } from './harness';
 import { containersOf, removeAgentContainers, scriptedModel, startScriptedModel, stopScriptedModel } from './podman';
 import {

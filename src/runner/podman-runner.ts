@@ -4,7 +4,8 @@ import { createWriteStream } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { AppConfig, ModelEntry, PodmanConfig } from './config';
+import { APP_ROOT } from '../common/app-root';
+import { AppConfig, ModelEntry, PodmanConfig } from '../config/app-config';
 import { AttemptRequest, AttemptResult, Runner } from './runner';
 
 /** Agent containers join only this network: it has no route out of the host. */
@@ -16,7 +17,7 @@ const PROXY_PORT = 3128;
 /** Every agent container carries it, with the Scan id as value. */
 export const SCAN_LABEL = 'ai-scanner.scan';
 
-const PROXY_SCRIPT = resolve(__dirname, '..', 'containers', 'egress-proxy', 'proxy.js');
+const PROXY_SCRIPT = resolve(APP_ROOT, 'containers', 'egress-proxy', 'proxy.js');
 
 /**
  * Providers opencode ships with, and where they send requests unless the Model Pool gives a

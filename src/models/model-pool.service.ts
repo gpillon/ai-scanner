@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { APP_CONFIG, AppConfig } from './config';
+import { APP_CONFIG, AppConfig } from '../config/app-config';
 
 @Injectable()
 export class ModelPool {

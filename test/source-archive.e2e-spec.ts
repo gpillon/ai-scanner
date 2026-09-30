@@ -1,6 +1,6 @@
 import { lstat, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { paths } from '../src/paths';
+import { paths } from '../src/common/paths';
 import { Harness, listFiles, makeZip, Script, scripts, startApp, waitUntil, ZipEntry } from './harness';
 
 describe('Source Archive extraction', () => {

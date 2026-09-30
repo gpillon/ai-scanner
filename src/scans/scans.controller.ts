@@ -25,11 +25,10 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { CreateScanDto, ModelDto, ProfileDto, ScanStatusDto } from './dto';
-import { ModelPool } from './model-pool';
-import { ProfileRegistry } from './profiles';
+import { ArchiveUploadInterceptor } from './archive-upload.interceptor';
+import { CreateScanDto } from './dto/create-scan.dto';
+import { ScanStatusDto } from './dto/scan-status.dto';
 import { ScansService } from './scans.service';
-import { ArchiveUploadInterceptor } from './upload.interceptor';
 
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing or wrong bearer token' })
@@ -89,30 +88,5 @@ export class ScansController {
   @ApiNotFoundResponse({ description: 'Unknown, deleted or expired Scan' })
   async remove(@Param('id') id: string): Promise<void> {
     await this.scans.delete(id);
-  }
-}
-
-@ApiBearerAuth()
-@ApiUnauthorizedResponse({ description: 'Missing or wrong bearer token' })
-@Controller('api')
-@ApiTags('discovery')
-export class DiscoveryController {
-  constructor(
-    private readonly profiles: ProfileRegistry,
-    private readonly models: ModelPool,
-  ) {}
-
-  @Get('profiles')
-  @ApiOperation({ summary: 'List Scan Profiles' })
-  @ApiOkResponse({ type: [ProfileDto] })
-  listProfiles(): ProfileDto[] {
-    return this.profiles.list().map(({ name, description, producesFindings }) => ({ name, description, producesFindings }));
-  }
-
-  @Get('models')
-  @ApiOperation({ summary: 'List the Model Pool, with the Default Model marked' })
-  @ApiOkResponse({ type: [ModelDto] })
-  listModels(): ModelDto[] {
-    return this.models.list();
   }
 }

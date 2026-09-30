@@ -6,11 +6,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { crc32, deflateRawSync } from 'node:zlib';
 import request from 'supertest';
-import { AppModule, configureApp } from '../src/app.module';
-import { Clock, Timer } from '../src/clock';
-import { AppConfig, loadConfig, MINUTE_MS } from '../src/config';
-import { AttemptRequest, AttemptResult, Runner } from '../src/runner';
-import { RetentionSweeper } from '../src/retention-sweeper';
+import { AppModule } from '../src/app.module';
+import { configureApp } from '../src/app.setup';
+import { Clock, Timer } from '../src/common/clock';
+import { AppConfig, loadConfig, MINUTE_MS } from '../src/config/app-config';
+import { AttemptRequest, AttemptResult, Runner } from '../src/runner/runner';
+import { RetentionSweeper } from '../src/scans/retention-sweeper.service';
 
 export const TOKEN = 'test-token';
 

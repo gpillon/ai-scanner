@@ -1,8 +1,9 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { mkdirSync } from 'node:fs';
-import { AppModule, configureApp } from './app.module';
-import { loadConfig } from './config';
+import { AppModule } from './app.module';
+import { configureApp } from './app.setup';
+import { loadConfig } from './config/app-config';
 
 async function bootstrap() {
   const config = loadConfig();

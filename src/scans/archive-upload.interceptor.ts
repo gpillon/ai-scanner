@@ -3,8 +3,8 @@ import { mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import multer from 'multer';
 import { Observable, finalize } from 'rxjs';
-import { APP_CONFIG, AppConfig } from './config';
-import { paths } from './paths';
+import { APP_CONFIG, AppConfig } from '../config/app-config';
+import { paths } from '../common/paths';
 
 /**
  * Receives the Source Archive (multipart field `file`) on disk, never in memory.

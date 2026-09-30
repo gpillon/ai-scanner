@@ -4,7 +4,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
-import { FINDING_SEVERITIES } from '../src/output-validator';
+import { FINDING_SEVERITIES } from '../src/reports/output-validator';
 import { filesUnder } from './harness';
 
 export const VULNERABLE_APP = resolve(__dirname, 'fixtures', 'vulnerable-app');
