@@ -5,12 +5,15 @@ export interface AttemptRequest {
   workspaceDir: string;
   /** Host directory the agent writes Artifacts into; the agent sees it as `/output`. */
   outputDir: string;
+  /** Host file the Runner writes the agent's transcript to; kept for debugging, never served. */
+  transcriptPath: string;
   prompt: string;
   profile: string;
   model: string;
 }
 
 export interface AttemptResult {
+  /** A non-zero exit makes the Attempt one without valid output, whatever it wrote. */
   exitCode: number;
 }
 

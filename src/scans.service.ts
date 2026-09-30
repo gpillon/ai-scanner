@@ -82,27 +82,32 @@ export class ScansService {
       finishedAt: null,
       failureReason: null,
     });
-    // The primary key makes the id claim atomic: a concurrent duplicate loses here.
     if (await this.scans.existsBy({ id: input.id })) throw new ConflictException(`Scan ${input.id} already exists`);
+    // The queue must not start the Scan before its Source Archive is in place; releasing wakes it.
+    const release = this.supervisor.hold(input.id);
     try {
-      await this.scans.insert(scan);
-    } catch (e) {
-      // Lost a race with a concurrent POST of the same id; anything else is a real failure.
-      if ((e as { code?: string }).code?.startsWith('SQLITE_CONSTRAINT')) {
-        throw new ConflictException(`Scan ${input.id} already exists`);
+      // The primary key makes the id claim atomic: a concurrent duplicate loses here.
+      try {
+        await this.scans.insert(scan);
+      } catch (e) {
+        // Lost a race with a concurrent POST of the same id; anything else is a real failure.
+        if ((e as { code?: string }).code?.startsWith('SQLITE_CONSTRAINT')) {
+          throw new ConflictException(`Scan ${input.id} already exists`);
+        }
+        throw e;
       }
-      throw e;
-    }
 
-    try {
-      const target = paths.sourceArchive(this.config.dataDir, input.id);
-      await mkdir(dirname(target), { recursive: true });
-      await rename(input.archivePath, target);
-    } catch (e) {
-      await this.scans.delete(input.id);
-      throw e;
+      try {
+        const target = paths.sourceArchive(this.config.dataDir, input.id);
+        await mkdir(dirname(target), { recursive: true });
+        await rename(input.archivePath, target);
+      } catch (e) {
+        await this.scans.delete(input.id);
+        throw e;
+      }
+    } finally {
+      release();
     }
-    this.supervisor.enqueue(input.id);
     return scan;
   }
 
@@ -125,13 +130,17 @@ export class ScansService {
     return { stream: this.store.stream(id, name), contentType };
   }
 
-  /** Stops the Scan if it runs, then removes it with all its data. The id is free afterwards. */
+  /** Stops the Scan if it is queued or runs, then removes it with all its data. The id is free afterwards. */
   async delete(id: string): Promise<void> {
     await this.get(id);
-    await this.supervisor.cancel(id);
-    await rm(paths.scanDir(this.config.dataDir, id), { recursive: true, force: true });
-    await this.store.delete(id);
-    await this.scans.delete(id);
+    const release = await this.supervisor.cancel(id);
+    try {
+      await rm(paths.scanDir(this.config.dataDir, id), { recursive: true, force: true });
+      await this.store.delete(id);
+      await this.scans.delete(id);
+    } finally {
+      release();
+    }
   }
 
   /** Ids of Scans created before `cutoff` (ISO-8601). */

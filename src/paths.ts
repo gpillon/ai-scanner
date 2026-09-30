@@ -9,4 +9,8 @@ export const paths = {
   sourceArchive: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'source.zip'),
   workspace: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'workspace'),
   output: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'output'),
+  /** `report.pdf` as rendered by the server, before it is stored as an Artifact. */
+  renderedPdf: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'report.pdf'),
+  transcript: (dataDir: string, id: string, attempt: number) =>
+    join(dataDir, 'scans', id, 'attempts', String(attempt), 'transcript.log'),
 };

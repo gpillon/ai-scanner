@@ -18,7 +18,7 @@ describe('Scan lifecycle', () => {
       expect(status).toMatchObject({
         id: 's1',
         attempts: 1,
-        artifacts: ['findings.json', 'report.md'],
+        artifacts: ['findings.json', 'report.md', 'report.pdf'],
         startedAt: '2026-01-01T00:00:00.000Z',
         finishedAt: '2026-01-01T00:00:00.000Z',
       });
@@ -54,12 +54,6 @@ describe('Scan lifecycle', () => {
       expect(res.body).toEqual({ findings: [] });
     });
 
-    it('gives 404 for an Artifact the Scan does not have', async () => {
-      await h.submit('s1');
-      await h.waitForState('s1', 'succeeded');
-      expect((await h.api.get('/api/scan/s1/artifacts/report.pdf')).status).toBe(404);
-    });
-
     it.each(['..%2F..%2Fscanner.sqlite', 'source.zip', 'other.txt'])('gives 404 for %s', async (name) => {
       await h.submit('s1');
       await h.waitForState('s1', 'succeeded');
@@ -89,7 +83,7 @@ describe('Scan lifecycle', () => {
       const status = await h.waitForState('s1', 'failed');
       expect(status.failureReason).toEqual(expect.any(String));
       expect(status.artifacts).toBeUndefined();
-      expect(status.attempts).toBe(1);
+      expect(status.attempts).toBe(3);
       expect((await h.api.get('/api/scan/s1/artifacts/report.md')).status).toBe(404);
     });
   });

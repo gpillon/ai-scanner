@@ -1,28 +1,42 @@
 import { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { crc32 } from 'node:zlib';
 import request from 'supertest';
 import { AppModule, configureApp } from '../src/app.module';
-import { Clock } from '../src/clock';
-import { AppConfig } from '../src/config';
+import { Clock, Timer } from '../src/clock';
+import { AppConfig, MINUTE_MS } from '../src/config';
 import { AttemptRequest, AttemptResult, Runner } from '../src/runner';
 import { RetentionSweeper } from '../src/retention-sweeper';
-import { writeFile } from 'node:fs/promises';
 
 export const TOKEN = 'test-token';
 
+export const MINUTE = MINUTE_MS;
+
+/** Time moves only on `advance`, which fires the timers that come due, earliest first. */
 export class FakeClock extends Clock {
+  private timers: { due: number; fire: () => void }[] = [];
+
   constructor(private current = new Date('2026-01-01T00:00:00.000Z')) {
     super();
   }
   now(): Date {
     return new Date(this.current);
   }
+  timer(ms: number): Timer {
+    let fire!: () => void;
+    const elapsed = new Promise<void>((resolve) => (fire = resolve));
+    const entry = { due: this.current.getTime() + ms, fire };
+    this.timers.push(entry);
+    return { elapsed, cancel: () => (this.timers = this.timers.filter((t) => t !== entry)) };
+  }
   advance(ms: number): void {
     this.current = new Date(this.current.getTime() + ms);
+    const due = this.timers.filter((t) => t.due <= this.current.getTime()).sort((a, b) => a.due - b.due);
+    this.timers = this.timers.filter((t) => !due.includes(t));
+    for (const t of due) t.fire();
   }
 }
 
@@ -32,20 +46,73 @@ export interface AttemptControl {
 }
 export type Script = (req: AttemptRequest, ctl: AttemptControl) => Promise<AttemptResult | void>;
 
+export const SAMPLE_FINDINGS = {
+  findings: [
+    {
+      severity: 'high',
+      title: 'SQL injection',
+      description: 'User input reaches a raw query.',
+      location: { file: 'src/db.js', line: 12 },
+    },
+    { severity: 'info', title: 'Outdated dependency', description: 'lodash 3', location: { file: 'package.json' } },
+  ],
+};
+
 export const scripts = {
   writeReport:
-    (content = '# Report\n\nAll good.\n'): Script =>
+    (content = '# Report\n\nAll good.\n', findings: unknown = { findings: [] }): Script =>
     async (req) => {
       await writeFile(join(req.outputDir, 'report.md'), content);
-      await writeFile(join(req.outputDir, 'findings.json'), '{"findings":[]}');
+      await writeFile(join(req.outputDir, 'findings.json'), JSON.stringify(findings));
     },
+  writeReportOnly:
+    (content = '# Report\n\nAll good.\n'): Script =>
+    async (req) =>
+      writeFile(join(req.outputDir, 'report.md'), content),
+  writeFindingsText:
+    (text: string): Script =>
+    async (req) =>
+      writeFile(join(req.outputDir, 'findings.json'), text),
   writeNothing: (): Script => async () => undefined,
   writeEmptyReport: (): Script => async (req) => writeFile(join(req.outputDir, 'report.md'), ''),
   crash: (): Script => async () => {
     throw new Error('agent crashed');
   },
+  /** Runs `then`, then exits with `exitCode`. */
+  exit:
+    (exitCode: number, then: Script = scripts.writeReport()): Script =>
+    async (req, ctl) => {
+      await then(req, ctl);
+      return { exitCode };
+    },
   hang: (): Script => (_req, ctl) => ctl.stopped,
+  /** Attempt N runs the Nth script; the last one repeats. */
+  perAttempt:
+    (...list: Script[]): Script =>
+    (req, ctl) =>
+      list[Math.min(req.attempt, list.length) - 1](req, ctl),
 };
+
+/** Attempts that wait until the test lets their Scan finish, or the supervisor stops them. */
+export class Gate {
+  private readonly released = new Set<string>();
+  private readonly waiting = new Map<string, () => void>();
+
+  script(then: Script = scripts.writeReport()): Script {
+    return async (req, ctl) => {
+      const released = this.released.has(req.scanId)
+        ? Promise.resolve(true)
+        : new Promise<boolean>((resolve) => this.waiting.set(req.scanId, () => resolve(true)));
+      if (await Promise.race([released, ctl.stopped.then(() => false)])) return then(req, ctl);
+    };
+  }
+
+  /** Lets the Scan's Attempt finish, now or as soon as it starts. */
+  release(scanId: string): void {
+    this.released.add(scanId);
+    this.waiting.get(scanId)?.();
+  }
+}
 
 /** Scriptable stand-in for the agent: the only fake in the suite. */
 export class FakeRunner extends Runner {
@@ -57,7 +124,13 @@ export class FakeRunner extends Runner {
   async run(req: AttemptRequest): Promise<AttemptResult> {
     this.calls.push(req);
     const stopped = new Promise<void>((resolve) => this.stops.set(req.scanId, resolve));
+    await writeFile(req.transcriptPath, `transcript of ${req.scanId} Attempt ${req.attempt}\n`);
     return (await this.script(req, { stopped })) ?? { exitCode: 0 };
+  }
+
+  /** Scan ids in the order their first Attempt started. */
+  started(): string[] {
+    return this.calls.filter((c) => c.attempt === 1).map((c) => c.scanId);
   }
 
   async stop(scanId: string): Promise<void> {
@@ -118,6 +191,8 @@ export interface Harness {
   anonymous: () => ReturnType<typeof request>;
   submit(id: string, fields?: Record<string, string>, archive?: Buffer | null, filename?: string): request.Test;
   waitForState(id: string, states: string | string[]): Promise<any>;
+  /** Downloads an Artifact as raw bytes. */
+  download(id: string, name: string): Promise<{ status: number; contentType: string; body: Buffer }>;
   /** Stops the app but keeps the data directory (to test restarts). */
   close(): Promise<void>;
   /** Stops the app and removes the data directory. */
@@ -149,6 +224,10 @@ export function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}):
     maxInstructionsLength: 200,
     retentionDays: 365,
     sweepIntervalMs: 0,
+    maxAttempts: 3,
+    attemptTimeoutMs: 20 * MINUTE,
+    scanTimeoutMs: 60 * MINUTE,
+    concurrency: 2,
     ...overrides,
   };
 }
@@ -192,6 +271,17 @@ export async function startApp(options: {
       }
       throw new Error(`Scan ${id} never reached ${wanted.join('|')}`);
     },
+    async download(id, name) {
+      const res = await api
+        .get(`/api/scan/${id}/artifacts/${name}`)
+        .buffer(true)
+        .parse((stream, done) => {
+          const chunks: Buffer[] = [];
+          stream.on('data', (c: Buffer) => chunks.push(c));
+          stream.on('end', () => done(null, Buffer.concat(chunks)));
+        });
+      return { status: res.status, contentType: res.headers['content-type'], body: res.body as Buffer };
+    },
     close: () => app.close(),
     dispose: async () => {
       await app.close();
@@ -200,6 +290,18 @@ export async function startApp(options: {
   };
   return harness;
 }
+
+/** Polls until `condition` holds; for supervisor progress the API does not show. */
+export async function waitUntil(condition: () => boolean | Promise<boolean>, what = 'condition'): Promise<void> {
+  for (let i = 0; i < 300; i++) {
+    if (await condition()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`Timed out waiting for ${what}`);
+}
+
+/** Lets the app's pending work run, before asserting that something did not happen. */
+export const settle = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 
 /** All file paths under a directory, relative. */
 export async function listFiles(dir: string): Promise<string[]> {

@@ -1,20 +1,40 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { mkdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { Repository } from 'typeorm';
 import { ArtifactStore } from './artifact-store';
-import { Clock } from './clock';
-import { APP_CONFIG, AppConfig } from './config';
+import { Clock, Timer } from './clock';
+import { APP_CONFIG, AppConfig, MINUTE_MS } from './config';
+import { checkOutput, FINDINGS_SCHEMA } from './output-validator';
 import { paths } from './paths';
 import { ProfileRegistry, ScanProfile } from './profiles';
-import { Runner } from './runner';
+import { renderReportPdf } from './report-renderer';
+import { AttemptRequest, Runner } from './runner';
 import { Scan } from './scan.entity';
 
 export const CALLER_INSTRUCTIONS_TAG = 'caller-instructions';
 
-export function buildPrompt(profile: ScanProfile, scan: Pick<Scan, 'language' | 'instructions'>): string {
-  const parts = [profile.promptTemplate.trimEnd(), `Write the Report in this language: ${scan.language}.`];
+/** Added to the prompt from the second Attempt on (ADR-0001). */
+export const PREVIOUS_ATTEMPT_NOTE =
+  'Note: the previous Attempt did not produce valid output. Whatever it wrote is still in /output. ' +
+  'Continue from that partial work, and make sure every required file is written, complete and valid.';
+
+export function buildPrompt(
+  profile: ScanProfile,
+  scan: Pick<Scan, 'language' | 'instructions'>,
+  attempt: number,
+): string {
+  const parts = [profile.promptTemplate.trimEnd()];
+  if (profile.producesFindings) {
+    parts.push(
+      '`/output/findings.json` must be valid against this JSON Schema:\n\n```json\n' +
+        JSON.stringify(FINDINGS_SCHEMA, null, 2) +
+        '\n```',
+    );
+  }
+  parts.push(`Write the Report in this language: ${scan.language}.`);
+  if (attempt > 1) parts.push(PREVIOUS_ATTEMPT_NOTE);
   if (scan.instructions) {
     const closing = `</${CALLER_INSTRUCTIONS_TAG}>`;
     parts.push(
@@ -26,15 +46,54 @@ export function buildPrompt(profile: ScanProfile, scan: Pick<Scan, 'language' | 
   return parts.join('\n\n') + '\n';
 }
 
+function minutes(ms: number): string {
+  return `${ms / MINUTE_MS} min`;
+}
+
+/** A set of Scan ids where each `add` is undone by its own release, so overlapping claims compose. */
+class IdClaims {
+  private readonly counts = new Map<string, number>();
+
+  add(id: string): () => void {
+    this.counts.set(id, (this.counts.get(id) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = this.counts.get(id)! - 1;
+      if (left) this.counts.set(id, left);
+      else this.counts.delete(id);
+    };
+  }
+
+  has(id: string): boolean {
+    return this.counts.has(id);
+  }
+
+  get size(): number {
+    return this.counts.size;
+  }
+}
+
+/** How an Attempt ended, before its output is checked. */
+type AttemptEnd = 'scan-timeout' | { problem?: string };
+
 /**
- * Deterministic Scan lifecycle (ADR-0001). Minimal for now: one Attempt, and success
- * means the Runner left a non-empty `report.md`.
+ * Deterministic Scan lifecycle (ADR-0001). The queue lives in the database: `queued` Scans
+ * start in submission order while fewer than `concurrency` run. Each Scan runs Attempts on the
+ * same workspace until one leaves valid output, Attempts run out, or the Scan times out.
  */
 @Injectable()
 export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(ScanSupervisor.name);
+  /** Running Scans, settling once the supervisor let go of them. */
   private readonly active = new Map<string, Promise<void>>();
-  private readonly cancelled = new Set<string>();
+  /** Scans the queue must not start: being created or deleted. */
+  private readonly held = new IdClaims();
+  /** Scans being deleted: their execution stops at the next check. */
+  private readonly cancelled = new IdClaims();
+  /** Queue passes run one at a time, so claims never race each other. */
+  private pumping: Promise<void> = Promise.resolve();
   private shuttingDown = false;
 
   constructor(
@@ -52,92 +111,196 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
       { state: 'running' },
       { state: 'failed', failureReason: 'Interrupted by a server restart', finishedAt: this.clock.now().toISOString() },
     );
-    for (const scan of await this.scans.find({ where: { state: 'queued' }, order: { createdAt: 'ASC' } })) {
-      this.enqueue(scan.id);
-    }
+    this.wake();
   }
 
   async onModuleDestroy(): Promise<void> {
     this.shuttingDown = true;
+    await this.pumping;
     await Promise.all([...this.active.keys()].map((id) => this.runner.stop(id)));
     await Promise.all(this.active.values());
   }
 
-  enqueue(id: string): void {
-    const done = new Promise<void>((resolve) => setImmediate(resolve))
-      .then(() => this.execute(id))
-      .catch((e) => this.log.error(`Scan ${id} crashed the supervisor: ${e?.stack ?? e}`))
-      .finally(() => this.active.delete(id));
+  /** Starts `queued` Scans while there is room. */
+  wake(): void {
+    this.pumping = this.pumping
+      .then(() => this.fill())
+      .catch((e) => this.log.error(`The Scan queue failed: ${e?.stack ?? e}`));
+  }
+
+  /** Keeps the queue from starting the Scan until the returned release is called. */
+  hold(id: string): () => void {
+    const release = this.held.add(id);
+    return () => {
+      release();
+      this.wake();
+    };
+  }
+
+  /**
+   * Stops the Scan, whether `queued`, running an Attempt or between Attempts, and keeps the
+   * supervisor off it until the returned release is called. Resolves once nothing runs for it.
+   */
+  async cancel(id: string): Promise<() => void> {
+    const releaseCancel = this.cancelled.add(id);
+    const releaseHold = this.hold(id);
+    const release = () => {
+      releaseCancel();
+      releaseHold();
+    };
+    try {
+      await this.pumping; // a claim in flight has now either started the Scan or not
+      const pending = this.active.get(id);
+      if (pending) {
+        await this.runner.stop(id);
+        await pending;
+      }
+    } catch (e) {
+      release();
+      throw e;
+    }
+    return release;
+  }
+
+  private async fill(): Promise<void> {
+    while (!this.shuttingDown && this.active.size < this.config.concurrency) {
+      const id = await this.nextQueued();
+      if (!id) return;
+      // Conditional on `queued`, so a Scan deleted meanwhile is never started.
+      const claimed = await this.scans.update(
+        { id, state: 'queued' },
+        { state: 'running', startedAt: this.clock.now().toISOString(), attempts: 0 },
+      );
+      if (claimed.affected) this.start(id);
+    }
+  }
+
+  /** The oldest `queued` Scan not held. Ordered by rowid: `createdAt` can tie. */
+  private async nextQueued(): Promise<string | undefined> {
+    const rows: { id: string }[] = await this.scans.query(
+      `SELECT id FROM scans WHERE state = 'queued' ORDER BY rowid LIMIT ?`,
+      [this.held.size + 1],
+    );
+    return rows.map((r) => r.id).find((id) => !this.held.has(id));
+  }
+
+  private start(id: string): void {
+    const done = this.execute(id)
+      .catch(async (e) => {
+        this.log.error(`Scan ${id} crashed the supervisor: ${e?.stack ?? e}`);
+        if (!this.lettingGo(id)) await this.fail(id, 'Internal error in the Scan Supervisor').catch(() => undefined);
+      })
+      .finally(() => {
+        this.active.delete(id);
+        this.wake();
+      });
     this.active.set(id, done);
   }
 
-  /** Stops the Scan's running Attempt, if any, and waits until the supervisor let go of it. */
-  async cancel(id: string): Promise<void> {
-    const pending = this.active.get(id);
-    if (!pending) return;
-    this.cancelled.add(id);
-    try {
-      await this.runner.stop(id);
-      await pending;
-    } finally {
-      this.cancelled.delete(id);
-    }
+  /** True once the supervisor must stop touching the Scan: it is being deleted, or the server stops. */
+  private lettingGo(id: string): boolean {
+    return this.cancelled.has(id) || this.shuttingDown;
   }
 
   private async execute(id: string): Promise<void> {
     const scan = await this.scans.findOneBy({ id });
-    if (!scan || this.cancelled.has(id)) return;
+    if (!scan || this.lettingGo(id)) return;
     const profile = this.profiles.get(scan.profile);
-    if (!profile) return this.fail(id, `Scan Profile ${scan.profile} no longer exists`, 0);
+    if (!profile) return this.fail(id, `Scan Profile ${scan.profile} no longer exists`);
 
     const workspaceDir = paths.workspace(this.config.dataDir, id);
     const outputDir = paths.output(this.config.dataDir, id);
     await mkdir(workspaceDir, { recursive: true });
     await mkdir(outputDir, { recursive: true });
-    await this.scans.update(id, { state: 'running', startedAt: this.clock.now().toISOString(), attempts: 1 });
 
-    // No await between this check and the Runner starting the Attempt, so a cancel either
-    // lands before it (skipped here) or after it (the Runner's stop() reaches the Attempt).
-    if (this.cancelled.has(id) || this.shuttingDown) return;
+    const scanTimer = this.clock.timer(this.config.scanTimeoutMs);
+    let scanTimedOut = false;
+    void scanTimer.elapsed.then(() => (scanTimedOut = true));
+    const scanTimeoutReason = `Scan timed out after ${minutes(this.config.scanTimeoutMs)}`;
     try {
-      await this.runner.run({
-        scanId: id,
-        attempt: 1,
-        workspaceDir,
-        outputDir,
-        prompt: buildPrompt(profile, scan),
-        profile: scan.profile,
-        model: scan.model,
-      });
-    } catch (e) {
-      this.log.warn(`Scan ${id} Attempt 1 crashed: ${(e as Error).message}`);
-    }
-    if (this.cancelled.has(id) || this.shuttingDown) return;
+      let problem = '';
+      for (let attempt = 1; attempt <= this.config.maxAttempts; attempt++) {
+        if (scanTimedOut) return await this.fail(id, scanTimeoutReason);
+        const transcriptPath = paths.transcript(this.config.dataDir, id, attempt);
+        await mkdir(dirname(transcriptPath), { recursive: true });
+        await this.scans.update(id, { attempts: attempt });
+        if (this.lettingGo(id)) return;
 
-    const artifacts = await this.collectArtifacts(outputDir, profile);
-    if (!artifacts.includes('report.md')) {
-      return this.fail(id, 'No valid Report after 1 Attempt', 1);
+        const end = await this.runAttempt(
+          {
+            scanId: id,
+            attempt,
+            workspaceDir,
+            outputDir,
+            transcriptPath,
+            prompt: buildPrompt(profile, scan, attempt),
+            profile: scan.profile,
+            model: scan.model,
+          },
+          scanTimer,
+        );
+        if (this.lettingGo(id)) return;
+        if (end === 'scan-timeout') return await this.fail(id, scanTimeoutReason);
+
+        const check = end.problem
+          ? { valid: false as const, reason: end.problem }
+          : await checkOutput(outputDir, profile.producesFindings);
+        if (this.lettingGo(id)) return;
+        if (check.valid) return await this.succeed(id, outputDir, check.artifacts);
+        problem = check.reason;
+        this.log.warn(`Scan ${id} Attempt ${attempt} has no valid output: ${problem}`);
+      }
+      await this.fail(id, `No valid output after ${this.config.maxAttempts} Attempts (last: ${problem})`);
+    } finally {
+      scanTimer.cancel();
     }
+  }
+
+  /** Runs one Attempt, stopping it when it or the Scan times out. */
+  private async runAttempt(request: AttemptRequest, scanTimer: Timer): Promise<AttemptEnd> {
+    const attemptTimer = this.clock.timer(this.config.attemptTimeoutMs);
+    try {
+      // Called synchronously from the caller's last `lettingGo` check: see Runner.stop.
+      const run = (async () => this.runner.run(request))().then(
+        (result): AttemptEnd =>
+          result.exitCode === 0 ? {} : { problem: `the agent exited with code ${result.exitCode}` },
+        (e): AttemptEnd => ({ problem: `the agent crashed: ${(e as Error)?.message ?? e}` }),
+      );
+      const end = await Promise.race([
+        run,
+        attemptTimer.elapsed.then(() => 'attempt-timeout' as const),
+        scanTimer.elapsed.then(() => 'scan-timeout' as const),
+      ]);
+      if (end !== 'attempt-timeout' && end !== 'scan-timeout') return end;
+      // A stopped Attempt has no valid output, whatever it wrote before being stopped.
+      await this.runner.stop(request.scanId);
+      await run;
+      return end === 'scan-timeout'
+        ? end
+        : { problem: `the Attempt timed out after ${minutes(this.config.attemptTimeoutMs)}` };
+    } finally {
+      attemptTimer.cancel();
+    }
+  }
+
+  /** Renders the PDF, then publishes all Artifacts at once and marks the Scan `succeeded`. */
+  private async succeed(id: string, outputDir: string, artifacts: string[]): Promise<void> {
+    let pdf: Buffer;
+    try {
+      pdf = await renderReportPdf(await readFile(join(outputDir, 'report.md'), 'utf8'));
+    } catch (e) {
+      this.log.error(`Scan ${id}: rendering report.pdf failed: ${(e as Error)?.stack ?? e}`);
+      return this.fail(id, 'Could not render report.pdf from report.md');
+    }
+    const pdfPath = paths.renderedPdf(this.config.dataDir, id);
+    await writeFile(pdfPath, pdf);
+    if (this.lettingGo(id)) return;
     for (const name of artifacts) await this.store.put(id, name, join(outputDir, name));
+    await this.store.put(id, 'report.pdf', pdfPath);
     await this.scans.update(id, { state: 'succeeded', finishedAt: this.clock.now().toISOString() });
   }
 
-  private async collectArtifacts(outputDir: string, profile: ScanProfile): Promise<string[]> {
-    const wanted = profile.producesFindings ? ['report.md', 'findings.json'] : ['report.md'];
-    const found: string[] = [];
-    for (const name of wanted) {
-      const info = await stat(join(outputDir, name)).catch(() => undefined);
-      if (info?.isFile() && info.size > 0) found.push(name);
-    }
-    return found;
-  }
-
-  private async fail(id: string, reason: string, attempts: number): Promise<void> {
-    await this.scans.update(id, {
-      state: 'failed',
-      failureReason: reason,
-      attempts,
-      finishedAt: this.clock.now().toISOString(),
-    });
+  private async fail(id: string, reason: string): Promise<void> {
+    await this.scans.update(id, { state: 'failed', failureReason: reason, finishedAt: this.clock.now().toISOString() });
   }
 }
