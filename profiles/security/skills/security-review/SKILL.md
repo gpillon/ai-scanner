@@ -88,7 +88,8 @@ and for trust boundaries crossed without validation.
    cover and follow its precedents.
 3. Load the **`vulnerability-triage-brocards`** skill and put each remaining candidate through its
    seven tests. Dismiss what fails one.
-4. Keep what survives. Assign the final severity and a confidence (`high` or `medium`); drop
+4. Keep what survives. Assign the final severity, a confidence (`high` or `medium`) and a
+   classification from [references/classification.md](references/classification.md); drop
    anything you would rate low confidence. Note every dismissed candidate with the reason: the
    Report lists them.
 
@@ -164,7 +165,10 @@ never repeat those in your text. Every field has a place in the Report; a missin
 - `location.file` is relative to `/workspace` (no leading `/workspace/`). `location.line` (and
   `endLine` when the flaw spans lines) must point at the vulnerable code itself: the server shows
   those lines as the evidence.
-- `cwe` is the most specific CWE you are sure of; `owasp` the OWASP Top 10 2021 category.
+- Take `category`, `cwe` and `owasp` from
+  [references/classification.md](references/classification.md), read once. Do not search the
+  skills or the workspace for CWE identifiers: when no row fits, use a CWE you know for certain,
+  or omit `cwe`.
 - Text values may use inline Markdown (`code`, **bold**), lists and fenced code blocks; never
   headings or tables.
 - Every text value is written in the Report language. `severity`, `category`, `cwe`, `owasp` and

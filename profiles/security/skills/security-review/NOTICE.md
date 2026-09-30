@@ -12,9 +12,11 @@ This skill is adapted from two MIT-licensed works. Their license texts are in `L
   cross-file data flow, self-verification, report) and severity scale, rewritten for a one-shot,
   read-only, offline Scan: no patch proposals or human approval step, output to a single
   `findings.json` holding the Findings and the data of the server's Report template, and
-  hand-offs to the `insecure-defaults`, `sharp-edges`
-  and `vulnerability-triage-brocards` skills. `references/report-format.md` is not vendored; the
-  Report format is defined in `SKILL.md`.
+  hand-offs to the `insecure-defaults`, `sharp-edges` and `vulnerability-triage-brocards` skills.
+  `references/report-format.md` is not vendored: the server's Report template defines the
+  Report, and `SKILL.md` the data the agent writes for it.
+- `references/classification.md` (category, CWE and OWASP per kind of Finding) is ours, not
+  upstream.
 
 ## anthropics/claude-code-security-review: `.claude/commands/security-review.md`
 
