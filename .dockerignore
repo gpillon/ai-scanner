@@ -1,0 +1,19 @@
+# Build context of the root Containerfile (Podman reads this file too).
+# Never send runtime data or secrets: data/ holds uploaded Source Archives and the database.
+.git
+.github
+.claude
+.env
+.env.*
+data/
+secrets/
+*.pem
+*.key
+node_modules/
+ui/node_modules/
+dist/
+ui/dist/
+coverage/
+*.log
+test/
+docs/

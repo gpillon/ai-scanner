@@ -37,6 +37,8 @@ export interface AppConfig {
   podman: PodmanConfig;
   dataDir: string;
   profilesDir: string;
+  /** The built web UI, served under /ui/ when the directory exists. */
+  uiDir?: string;
   models: ModelEntry[];
   defaultModel: string;
   defaultLanguage: string;
@@ -109,6 +111,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     dataDir: resolve(env.SCANNER_DATA_DIR ?? 'data'),
     profilesDir: resolve(env.SCANNER_PROFILES_DIR ?? resolve(__dirname, '..', 'profiles')),
+    uiDir: resolve(env.SCANNER_UI_DIR ?? resolve(__dirname, '..', 'ui', 'dist')),
     models,
     defaultModel,
     defaultLanguage: env.SCANNER_DEFAULT_LANGUAGE ?? 'en',
