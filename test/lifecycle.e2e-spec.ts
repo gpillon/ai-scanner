@@ -1,4 +1,4 @@
-import { FakeRunner, Harness, listFiles, scripts, startApp } from './harness';
+import { FakeRunner, Harness, listFiles, scripts, startApp, waitUntil } from './harness';
 
 describe('Scan lifecycle', () => {
   let h: Harness;
@@ -187,7 +187,7 @@ describe('Scan lifecycle', () => {
     it('fails a Scan that was running as interrupted', async () => {
       h.runner.script = scripts.hang();
       await h.submit('s1');
-      await h.waitForState('s1', 'running');
+      await waitUntil(() => h.runner.calls.length === 1, 'the first Attempt');
       await h.close();
 
       const restarted = await startApp({ dataDir: h.dataDir, runner: new FakeRunner() });

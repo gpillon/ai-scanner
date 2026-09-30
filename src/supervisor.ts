@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Repository } from 'typeorm';
 import { ArtifactStore } from './artifact-store';
@@ -12,6 +12,7 @@ import { ProfileRegistry, ScanProfile } from './profiles';
 import { renderReportPdf } from './report-renderer';
 import { AttemptRequest, Runner } from './runner';
 import { Scan } from './scan.entity';
+import { extractSourceArchive, InvalidSourceArchiveError } from './source-archive';
 
 export const CALLER_INSTRUCTIONS_TAG = 'caller-instructions';
 
@@ -109,10 +110,9 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     // Claimed just before the server stopped, but no Attempt ever started: still queued.
     await this.scans.update({ state: 'running', attempts: 0 }, { state: 'queued', startedAt: null });
-    await this.scans.update(
-      { state: 'running' },
-      { state: 'failed', failureReason: 'Interrupted by a server restart', finishedAt: this.clock.now().toISOString() },
-    );
+    for (const { id } of await this.scans.find({ select: { id: true }, where: { state: 'running' } })) {
+      await this.fail(id, 'Interrupted by a server restart');
+    }
     this.wake();
   }
 
@@ -212,8 +212,21 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
 
     const workspaceDir = paths.workspace(this.config.dataDir, id);
     const outputDir = paths.output(this.config.dataDir, id);
+    // Emptied first: a restart may have left a partial extraction behind.
+    await rm(workspaceDir, { recursive: true, force: true });
     await mkdir(workspaceDir, { recursive: true });
     await mkdir(outputDir, { recursive: true });
+    try {
+      await extractSourceArchive(paths.sourceArchive(this.config.dataDir, id), workspaceDir, {
+        maxBytes: this.config.maxExtractedBytes,
+        maxFiles: this.config.maxExtractedFiles,
+      });
+    } catch (e) {
+      if (!(e instanceof InvalidSourceArchiveError)) throw e;
+      if (this.lettingGo(id)) return;
+      return this.fail(id, `Invalid Source Archive: ${e.message}`);
+    }
+    if (this.lettingGo(id)) return;
 
     const scanTimer = this.clock.timer(this.config.scanTimeoutMs);
     let scanTimedOut = false;
@@ -301,10 +314,21 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
     if (this.lettingGo(id)) return;
     for (const name of artifacts) await this.store.put(id, name, join(outputDir, name));
     await this.store.put(id, 'report.pdf', pdfPath);
+    await this.discardSource(id);
     await this.scans.update(id, { state: 'succeeded', finishedAt: this.clock.now().toISOString() });
   }
 
   private async fail(id: string, reason: string): Promise<void> {
+    await this.discardSource(id);
     await this.scans.update(id, { state: 'failed', failureReason: reason, finishedAt: this.clock.now().toISOString() });
+  }
+
+  /**
+   * Removes the customer's code once the Scan ends (ADR-0003): the Source Archive and the
+   * workspace. The output and transcripts stay, as internal debug output (ADR-0001).
+   */
+  private async discardSource(id: string): Promise<void> {
+    await rm(paths.sourceArchive(this.config.dataDir, id), { force: true });
+    await rm(paths.workspace(this.config.dataDir, id), { recursive: true, force: true });
   }
 }

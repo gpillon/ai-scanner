@@ -357,7 +357,7 @@ describe('Scan Supervisor', () => {
 
       gate.release('a');
       await h.waitForState('a', 'succeeded');
-      await h.waitForState('c', 'running');
+      await waitUntil(() => h.runner.calls.length === 3, 'the queued Scan');
       expect(h.runner.started()).toEqual(['a', 'b', 'c']);
     });
 

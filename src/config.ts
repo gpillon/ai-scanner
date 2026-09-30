@@ -19,6 +19,10 @@ export interface AppConfig {
   defaultModel: string;
   defaultLanguage: string;
   maxArchiveBytes: number;
+  /** The Source Archive may extract to at most this many bytes... */
+  maxExtractedBytes: number;
+  /** ...and hold at most this many entries (files and directories). */
+  maxExtractedFiles: number;
   maxInstructionsLength: number;
   retentionDays: number;
   /** Attempts per Scan before it is `failed`. */
@@ -70,6 +74,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     defaultModel,
     defaultLanguage: env.SCANNER_DEFAULT_LANGUAGE ?? 'en',
     maxArchiveBytes: num(env.SCANNER_MAX_ARCHIVE_MB, 200) * 1024 * 1024,
+    maxExtractedBytes: positive(env.SCANNER_MAX_EXTRACTED_MB, 1024) * 1024 * 1024,
+    maxExtractedFiles: positiveInt(env.SCANNER_MAX_EXTRACTED_FILES, 100_000),
     maxInstructionsLength: num(env.SCANNER_MAX_INSTRUCTIONS_LENGTH, 2000),
     retentionDays: num(env.SCANNER_RETENTION_DAYS, 365),
     sweepIntervalMs: num(env.SCANNER_SWEEP_INTERVAL_MINUTES, 60) * MINUTE_MS,

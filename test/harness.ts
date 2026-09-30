@@ -3,7 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { crc32 } from 'node:zlib';
+import { crc32, deflateRawSync } from 'node:zlib';
 import request from 'supertest';
 import { AppModule, configureApp } from '../src/app.module';
 import { Clock, Timer } from '../src/clock';
@@ -137,30 +137,48 @@ export class FakeRunner extends Runner {
   }
 }
 
-/** A stored (uncompressed) zip with the given entries. */
-export function makeZip(entries: Record<string, string> = { 'src/index.js': 'console.log(1)\n' }): Buffer {
+/** A zip entry with control over how it is encoded, for crafting hostile Source Archives. */
+export interface ZipEntry {
+  data: string | Buffer;
+  /** Deflate the data instead of storing it. */
+  deflate?: boolean;
+  /** Uncompressed size written in the headers, instead of the real one. */
+  declaredSize?: number;
+  /** Marks the entry as a Unix symlink whose target is `data`. */
+  symlink?: boolean;
+}
+
+/** A zip with the given entries; plain strings are stored uncompressed. */
+export function makeZip(entries: Record<string, string | ZipEntry> = { 'src/index.js': 'console.log(1)\n' }): Buffer {
   const parts: Buffer[] = [];
   const central: Buffer[] = [];
   let offset = 0;
-  for (const [name, text] of Object.entries(entries)) {
+  for (const [name, spec] of Object.entries(entries)) {
+    const entry = typeof spec === 'string' ? { data: spec } : spec;
     const nameBuf = Buffer.from(name);
-    const data = Buffer.from(text);
-    const crc = crc32(data);
+    const raw = Buffer.from(entry.data);
+    const data = entry.deflate ? deflateRawSync(raw) : raw;
+    const method = entry.deflate ? 8 : 0;
+    const size = entry.declaredSize ?? raw.length;
+    const crc = crc32(raw);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(method, 8);
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(data.length, 18);
-    local.writeUInt32LE(data.length, 22);
+    local.writeUInt32LE(size, 22);
     local.writeUInt16LE(nameBuf.length, 26);
     const dir = Buffer.alloc(46);
     dir.writeUInt32LE(0x02014b50, 0);
-    dir.writeUInt16LE(20, 4);
+    dir.writeUInt16LE(entry.symlink ? (3 << 8) | 20 : 20, 4); // made by Unix, for the mode bits
     dir.writeUInt16LE(20, 6);
+    dir.writeUInt16LE(method, 10);
     dir.writeUInt32LE(crc, 16);
     dir.writeUInt32LE(data.length, 20);
-    dir.writeUInt32LE(data.length, 24);
+    dir.writeUInt32LE(size, 24);
     dir.writeUInt16LE(nameBuf.length, 28);
+    if (entry.symlink) dir.writeUInt32LE((0o120777 << 16) >>> 0, 38);
     dir.writeUInt32LE(offset, 42);
     parts.push(local, nameBuf, data);
     central.push(dir, nameBuf);
@@ -219,6 +237,8 @@ export function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}):
     defaultModel: 'fast-model',
     defaultLanguage: 'en',
     maxArchiveBytes: 1024 * 1024,
+    maxExtractedBytes: 64 * 1024,
+    maxExtractedFiles: 20,
     maxInstructionsLength: 200,
     retentionDays: 365,
     sweepIntervalMs: 0,
