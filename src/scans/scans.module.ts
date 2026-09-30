@@ -8,6 +8,7 @@ import { RunnerModule } from '../runner/runner.module';
 import { ArchiveUploadInterceptor } from './archive-upload.interceptor';
 import { Scan } from './entities/scan.entity';
 import { RetentionSweeper } from './retention-sweeper.service';
+import { ScanEventsService } from './scan-events.service';
 import { ScanSupervisor } from './scan-supervisor.service';
 import { ScansController } from './scans.controller';
 import { ScansService } from './scans.service';
@@ -21,7 +22,7 @@ export class ScansModule {
       module: ScansModule,
       imports: [TypeOrmModule.forFeature([Scan]), RunnerModule.register(runner), ArtifactsModule, ProfilesModule, ModelsModule],
       controllers: [ScansController],
-      providers: [ScansService, ScanSupervisor, RetentionSweeper, ArchiveUploadInterceptor],
+      providers: [ScansService, ScanSupervisor, ScanEventsService, RetentionSweeper, ArchiveUploadInterceptor],
     };
   }
 }

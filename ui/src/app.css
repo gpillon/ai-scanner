@@ -45,3 +45,100 @@
   margin-top: var(--pf-t--global--spacer--sm);
   color: var(--pf-t--global--text--color--subtle);
 }
+
+/* Activity log of a Scan: one compact row per thing the agent does. */
+.app-activity {
+  max-height: 420px;
+  overflow-y: auto;
+  font-size: var(--pf-t--global--font--size--sm);
+  line-height: 1.5;
+}
+
+.app-activity-row {
+  display: grid;
+  grid-template-columns: auto 1.25rem 1fr;
+  gap: var(--pf-t--global--spacer--sm);
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.app-activity-time {
+  font-family: var(--pf-t--global--font--family--mono, monospace);
+  color: var(--pf-t--global--text--color--subtle);
+  white-space: nowrap;
+}
+
+.app-activity-icon {
+  color: var(--pf-t--global--icon--color--subtle);
+  text-align: center;
+}
+
+.app-activity-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The agent's own words keep their line breaks; tool calls and logs read as code. */
+.app-activity-text-kind .app-activity-text {
+  white-space: pre-wrap;
+}
+
+.app-activity-tool-kind .app-activity-text,
+.app-activity-log .app-activity-text {
+  font-family: var(--pf-t--global--font--family--mono, monospace);
+}
+
+.app-activity-toolname {
+  display: inline-block;
+  min-width: 5.5rem;
+  font-family: var(--pf-t--global--font--family--body, sans-serif);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.app-activity-step,
+.app-activity-log {
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.app-activity-failed,
+.app-activity-failed .app-activity-icon {
+  color: var(--pf-t--global--color--status--danger--default);
+}
+
+.app-activity-attempt {
+  margin: var(--pf-t--global--spacer--sm) 0 var(--pf-t--global--spacer--xs);
+  padding-bottom: var(--pf-t--global--spacer--xs);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.app-activity-attempt:first-child {
+  margin-top: 0;
+}
+
+.app-activity-error {
+  color: var(--pf-t--global--color--status--warning--default);
+}
+
+.app-live::before {
+  content: '';
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-right: 0.4em;
+  border-radius: 50%;
+  background: currentColor;
+  animation: app-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes app-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-live::before {
+    animation: none;
+  }
+}

@@ -144,6 +144,50 @@ export const api = {
   },
 };
 
+/** One line of what the agent did, as `GET /api/scan/<id>/events` sends it. */
+export interface Activity {
+  attempt: number;
+  at: string;
+  kind: 'tool' | 'text' | 'step' | 'error' | 'log';
+  tool?: string;
+  ok?: boolean;
+  text: string;
+}
+
+export type ScanEvent =
+  | { type: 'state'; data: ScanStatus }
+  | { type: 'attempt'; data: { attempt: number } }
+  | { type: 'activity'; data: Activity }
+  | { type: 'deleted'; data: { id: string } };
+
+/**
+ * Follows `GET /api/scan/<id>/events` until the server ends it or `signal` aborts. EventSource
+ * cannot send the bearer header, so this reads the server-sent events off a fetch body.
+ */
+export async function followScan(id: string, onEvent: (event: ScanEvent) => void, signal: AbortSignal): Promise<void> {
+  const res = await request(`/api/scan/${encodeURIComponent(id)}/events`, { signal, headers: { Accept: 'text/event-stream' } });
+  if (!res.body) return;
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buffer += value.replace(/\r\n/g, '\n');
+    let end: number;
+    while ((end = buffer.indexOf('\n\n')) >= 0) {
+      const block = buffer.slice(0, end);
+      buffer = buffer.slice(end + 2);
+      let type = 'message';
+      const data: string[] = [];
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event:')) type = line.slice(6).trim();
+        else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+      }
+      if (data.length) onEvent({ type, data: JSON.parse(data.join('\n')) } as ScanEvent);
+    }
+  }
+}
+
 /** Saves a Blob as a file through a temporary object URL. */
 export function saveBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);

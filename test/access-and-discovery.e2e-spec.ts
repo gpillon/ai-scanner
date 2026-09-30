@@ -14,6 +14,7 @@ describe('access and discovery', () => {
       ['GET', '/api/scans'],
       ['GET', '/api/scan/abc'],
       ['GET', '/api/scan/abc/artifacts/report.md'],
+      ['GET', '/api/scan/abc/events'],
       ['POST', '/api/scan/abc'],
       ['DELETE', '/api/scan/abc'],
     ])('%s %s without a token gives 401', async (method, url) => {
@@ -62,6 +63,7 @@ describe('access and discovery', () => {
         'GET /api/scan/{id}',
         'DELETE /api/scan/{id}',
         'GET /api/scan/{id}/artifacts/{name}',
+        'GET /api/scan/{id}/events',
         'GET /api/profiles',
         'GET /api/models',
       ].sort(),

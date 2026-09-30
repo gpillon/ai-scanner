@@ -52,9 +52,12 @@ curl -H "Authorization: Bearer $TOKEN" -F file=@code.zip -F profile=security \
 
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scans              # every Scan, newest first
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scan/$ID          # queued → running → succeeded | failed
+curl -N -H "Authorization: Bearer $TOKEN" localhost:3000/api/scan/$ID/events  # follow it live (server-sent events)
 curl -H "Authorization: Bearer $TOKEN" -o report.pdf localhost:3000/api/scan/$ID/artifacts/report.pdf
 curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:3000/api/scan/$ID  # stop and remove
 ```
+
+`/events` replays what already happened, then streams `state`, `attempt` and `activity` events until the Scan finishes. An `activity` event is a one-line summary of a tool call, a piece of the agent's text or a step, never the raw transcript. opencode reports each tool call and each block of text once it is complete, so the stream moves in steps rather than token by token. Browsers' `EventSource` cannot send the bearer header, so the UI reads the stream with `fetch`.
 
 The OpenAPI document is at `/api/openapi.json`, and `/api/docs` renders it. Neither requires the token.
 
@@ -64,7 +67,7 @@ The UI lives in [`ui/`](ui): Vite, React, TypeScript and [PatternFly](https://ww
 
 - **Scans**: every Scan on the server, newest first, with live state and a filter.
 - **New Scan**: upload a zip and pick a profile, model, language and instructions. The Scan id is a random UUID.
-- **Scan**: details, failure reason, Artifact downloads, a Findings table, and delete.
+- **Scan**: details, failure reason, Artifact downloads, a Findings table, and delete. An **Activity** log shows what the agent does as it does it, and still shows it after the Scan has finished.
 - **Documentation**: the backend's Swagger UI, already signed in with your token.
 
 In production the backend serves the built UI as static files under `/ui/`, and `/` redirects there. The UI is public: it holds no data, and it asks for the token to call the API. If `ui/dist` is missing, for instance when only the backend was built, the backend serves the API alone. `SCANNER_UI_DIR` points it at another build.

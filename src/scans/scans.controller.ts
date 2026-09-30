@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Req,
+  Sse,
   StreamableFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -28,6 +29,7 @@ import {
 import { ArchiveUploadInterceptor } from './archive-upload.interceptor';
 import { CreateScanDto } from './dto/create-scan.dto';
 import { ScanStatusDto } from './dto/scan-status.dto';
+import { ScanEventsService } from './scan-events.service';
 import { ScansService } from './scans.service';
 
 @ApiBearerAuth()
@@ -35,7 +37,10 @@ import { ScansService } from './scans.service';
 @Controller('api')
 @ApiTags('scans')
 export class ScansController {
-  constructor(private readonly scans: ScansService) {}
+  constructor(
+    private readonly scans: ScansService,
+    private readonly scanEvents: ScanEventsService,
+  ) {}
 
   @Post('scan/:id')
   @UseInterceptors(ArchiveUploadInterceptor)
@@ -77,6 +82,22 @@ export class ScansController {
   async status(@Param('id') id: string) {
     const scan = await this.scans.get(id);
     return ScanStatusDto.from(scan, await this.scans.artifactNames(scan));
+  }
+
+  @Sse('scan/:id/events')
+  @ApiOperation({
+    summary: 'Follow a Scan as server-sent events',
+    description:
+      'Replays what already happened, then follows the Scan until it has finished. Events: `state` (a Scan ' +
+      'status, whenever it changes), `attempt` ({attempt}, when an Attempt starts), `activity` (what the agent ' +
+      'does: {attempt, at, kind, tool?, ok?, text}) and `deleted`. Activity is a summary of the agent transcript, ' +
+      'never the transcript itself.',
+  })
+  @ApiProduces('text/event-stream')
+  @ApiOkResponse({ description: 'The event stream' })
+  @ApiNotFoundResponse({ description: 'Unknown, deleted or expired Scan' })
+  events(@Param('id') id: string) {
+    return this.scanEvents.stream(id);
   }
 
   @Get('scan/:id/artifacts/:name')

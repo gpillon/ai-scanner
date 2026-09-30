@@ -8,6 +8,7 @@ We chose this so behaviour changes happen in skills, not server code, and so the
 
 ## Consequences
 
-- A `failed` Scan exposes only its failure reason. Partial Artifacts and the agent transcript are kept internally for debugging and never served to the caller: a half-written Report mistaken for a complete one is worse than no Report.
+- A `failed` Scan exposes only its failure reason and its activity (next point). Partial Artifacts and the agent transcript are kept internally for debugging and never served to the caller: a half-written Report mistaken for a complete one is worse than no Report.
+- The caller can follow what the agent does, live and afterwards, through `GET /api/scan/<id>/events`. The stream carries one summary line per tool call, text or step, derived from the transcript. It never carries the transcript itself, which holds the prompt, the skills and whole files, and it never carries Artifacts, so it cannot be mistaken for a Report.
 - Improving Report quality means changing skills or prompts, never adding heuristics to the server.
 - A Scan Profile with a Report Template narrows this contract: the agent writes only `findings.json`, and the server fills `report.md` and the PDF from it (ADR-0005).

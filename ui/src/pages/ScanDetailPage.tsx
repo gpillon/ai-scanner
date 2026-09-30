@@ -38,6 +38,7 @@ import SearchIcon from '@patternfly/react-icons/dist/esm/icons/search-icon';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { useEffect, useState } from 'react';
 import { api, ApiError, saveBlob, type ScanStatus } from '../api';
+import { ActivityLog } from '../components/ActivityLog';
 import { formatTime, isActive, ScanStateLabel } from '../components/ScanStateLabel';
 import { href, navigate } from '../router';
 
@@ -271,6 +272,10 @@ export function ScanDetailPage({ id }: { id: string }) {
                 </CardBody>
               </Card>
             </Gallery>
+          </StackItem>
+
+          <StackItem>
+            <ActivityLog scanId={id} onState={setScan} />
           </StackItem>
 
           {findings && (
