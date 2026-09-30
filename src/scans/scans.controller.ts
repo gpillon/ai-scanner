@@ -32,12 +32,12 @@ import { ScansService } from './scans.service';
 
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing or wrong bearer token' })
-@Controller('api/scan')
+@Controller('api')
 @ApiTags('scans')
 export class ScansController {
   constructor(private readonly scans: ScansService) {}
 
-  @Post(':id')
+  @Post('scan/:id')
   @UseInterceptors(ArchiveUploadInterceptor)
   @ApiOperation({ summary: 'Start a Scan under a caller-chosen id' })
   @ApiConsumes('multipart/form-data')
@@ -62,7 +62,15 @@ export class ScansController {
     return ScanStatusDto.from(scan, []);
   }
 
-  @Get(':id')
+  @Get('scans')
+  @ApiOperation({ summary: 'List every Scan, newest first' })
+  @ApiOkResponse({ type: [ScanStatusDto] })
+  async list() {
+    const scans = await this.scans.list();
+    return Promise.all(scans.map(async (scan) => ScanStatusDto.from(scan, await this.scans.artifactNames(scan))));
+  }
+
+  @Get('scan/:id')
   @ApiOperation({ summary: 'Scan status' })
   @ApiOkResponse({ type: ScanStatusDto })
   @ApiNotFoundResponse({ description: 'Unknown, deleted or expired Scan' })
@@ -71,7 +79,7 @@ export class ScansController {
     return ScanStatusDto.from(scan, await this.scans.artifactNames(scan));
   }
 
-  @Get(':id/artifacts/:name')
+  @Get('scan/:id/artifacts/:name')
   @ApiOperation({ summary: 'Download an Artifact of a succeeded Scan' })
   @ApiProduces('text/markdown', 'application/pdf', 'application/json')
   @ApiOkResponse({ description: 'The Artifact file' })
@@ -81,7 +89,7 @@ export class ScansController {
     return new StreamableFile(stream as never, { type: contentType });
   }
 
-  @Delete(':id')
+  @Delete('scan/:id')
   @HttpCode(204)
   @ApiOperation({ summary: 'Stop (if running) and remove a Scan with all its data' })
   @ApiNoContentResponse({ description: 'Scan removed; the id is free again' })

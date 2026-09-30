@@ -118,6 +118,8 @@ export const api = {
 
   models: async (): Promise<Model[]> => (await request('/api/models')).json(),
 
+  scans: async (): Promise<ScanStatus[]> => (await request('/api/scans')).json(),
+
   scan: async (id: string): Promise<ScanStatus> => (await request(`/api/scan/${encodeURIComponent(id)}`)).json(),
 
   async createScan(scan: NewScan): Promise<ScanStatus> {

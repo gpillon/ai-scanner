@@ -38,7 +38,6 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { useEffect, useState } from 'react';
 import { api, ApiError, saveBlob, type ScanStatus } from '../api';
 import { formatTime, isActive, ScanStateLabel } from '../components/ScanStateLabel';
-import { history } from '../history';
 import { href, navigate } from '../router';
 
 const POLL_MS = 3000;
@@ -90,7 +89,6 @@ export function ScanDetailPage({ id }: { id: string }) {
         const next = await api.scan(id);
         if (cancelled) return;
         setScan(next);
-        history.remember(id);
         if (isActive(next.state)) timer = setTimeout(refresh, POLL_MS);
         else if (next.artifacts?.includes('findings.json')) {
           const blob = await api.artifact(id, 'findings.json');
@@ -120,7 +118,6 @@ export function ScanDetailPage({ id }: { id: string }) {
     setDeleteError(undefined);
     try {
       await api.deleteScan(id);
-      history.forget(id);
       navigate({ page: 'scans' });
     } catch (e) {
       setDeleteError((e as Error).message);
@@ -146,8 +143,8 @@ export function ScanDetailPage({ id }: { id: string }) {
             <EmptyStateBody>
               No Scan has id <code>{id}</code>: it never existed, was deleted, or its retention expired.
             </EmptyStateBody>
-            <Button variant="link" onClick={() => (history.forget(id), navigate({ page: 'scans' }))}>
-              Forget it and go back to Scans
+            <Button variant="link" component="a" href={href({ page: 'scans' })}>
+              Back to Scans
             </Button>
           </EmptyState>
         </PageSection>

@@ -24,10 +24,9 @@ import {
 import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, SCAN_ID_PATTERN, type Model, type Profile } from '../api';
-import { history } from '../history';
 import { navigate } from '../router';
 
-/** Random, hence unguessable by other holders of the token (ADR-0002). */
+/** Random, so callers never pick the same id by chance. */
 const newScanId = (): string => crypto.randomUUID();
 
 export function NewScanPage() {
@@ -67,7 +66,6 @@ export function NewScanPage() {
     setSubmitError(undefined);
     try {
       const scan = await api.createScan({ id, file, profile, model, language: language.trim(), instructions: instructions.trim() });
-      history.remember(scan.id);
       navigate({ page: 'scan', id: scan.id });
     } catch (e) {
       setSubmitError((e as Error).message);
@@ -189,7 +187,7 @@ export function NewScanPage() {
                     <HelperText>
                       <HelperTextItem variant={idValid ? 'default' : 'error'}>
                         {idValid
-                          ? 'Anyone holding the token and this id can read the Report: keep it unguessable.'
+                          ? 'Pick your own, or keep the random one.'
                           : '1-64 characters: lowercase letters, digits and dashes.'}
                       </HelperTextItem>
                     </HelperText>

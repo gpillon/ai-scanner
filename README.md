@@ -38,7 +38,7 @@ Sign in with the token from `SCANNER_TOKEN` in `.env`. With `RUNNER=fake`, Scans
 
 ## Using the API
 
-Every `/api` endpoint requires `Authorization: Bearer <SCANNER_TOKEN>` ([ADR-0002](docs/adr/0002-no-user-concept-caller-chosen-scan-id.md)). The caller chooses the Scan id. Anyone with the token and the id can read the Report, so ids should be unguessable.
+Every `/api` endpoint requires `Authorization: Bearer <SCANNER_TOKEN>` ([ADR-0002](docs/adr/0002-no-user-concept-caller-chosen-scan-id.md)). The caller chooses the Scan id. `GET /api/scans` lists every Scan, so anyone with the token can read every Report.
 
 ```sh
 TOKEN=change-me; ID=$(uuidgen | tr A-Z a-z)
@@ -50,6 +50,7 @@ curl -H "Authorization: Bearer $TOKEN" -F file=@code.zip -F profile=security \
      -F language=en -F instructions="Focus on the payment module" \
      localhost:3000/api/scan/$ID
 
+curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scans              # every Scan, newest first
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scan/$ID          # queued → running → succeeded | failed
 curl -H "Authorization: Bearer $TOKEN" -o report.pdf localhost:3000/api/scan/$ID/artifacts/report.pdf
 curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:3000/api/scan/$ID  # stop and remove
@@ -61,7 +62,7 @@ The OpenAPI document is at `/api/openapi.json`, and `/api/docs` renders it. Neit
 
 The UI lives in [`ui/`](ui): Vite, React, TypeScript and [PatternFly](https://www.patternfly.org). Its pages:
 
-- **Scans**: the Scans this browser started or opened, with their live state. The server deliberately has no endpoint that lists Scans, so other Scans are opened by id.
+- **Scans**: every Scan on the server, newest first, with live state and a filter.
 - **New Scan**: upload a zip and pick a profile, model, language and instructions. The Scan id is a random UUID.
 - **Scan**: details, failure reason, Artifact downloads, a Findings table, and delete.
 - **Documentation**: the backend's Swagger UI, already signed in with your token.

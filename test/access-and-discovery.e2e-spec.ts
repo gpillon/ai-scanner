@@ -11,6 +11,7 @@ describe('access and discovery', () => {
     it.each([
       ['GET', '/api/profiles'],
       ['GET', '/api/models'],
+      ['GET', '/api/scans'],
       ['GET', '/api/scan/abc'],
       ['GET', '/api/scan/abc/artifacts/report.md'],
       ['POST', '/api/scan/abc'],
@@ -56,6 +57,7 @@ describe('access and discovery', () => {
     );
     expect(operations.sort()).toEqual(
       [
+        'GET /api/scans',
         'POST /api/scan/{id}',
         'GET /api/scan/{id}',
         'DELETE /api/scan/{id}',

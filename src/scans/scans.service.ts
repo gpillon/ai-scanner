@@ -117,6 +117,11 @@ export class ScansService {
     return scan;
   }
 
+  /** Every Scan any caller started, newest first: whoever holds the token sees them all. */
+  list(): Promise<Scan[]> {
+    return this.scans.find({ order: { createdAt: 'DESC', id: 'ASC' } });
+  }
+
   async artifactNames(scan: Scan): Promise<string[]> {
     return scan.state === 'succeeded' ? this.store.list(scan.id) : [];
   }
