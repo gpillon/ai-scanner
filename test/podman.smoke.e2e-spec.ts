@@ -12,13 +12,14 @@
  * The real Scan reviews test/fixtures/vulnerable-app, whose planted vulnerabilities it must find.
  */
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { AppConfig, loadConfig, ModelEntry, MINUTE_MS } from '../src/config';
 import { paths } from '../src/paths';
 import { EGRESS_NETWORK, modelEndpoint, PodmanRunner, SCAN_LABEL } from '../src/podman-runner';
-import { Harness, makeZip, startApp, testConfig, waitUntil } from './harness';
+import { FINDING_SEVERITIES } from '../src/output-validator';
+import { filesUnder, Harness, makeZip, startApp, testConfig, waitUntil } from './harness';
 
 const enabled = process.env.SCANNER_SMOKE === '1';
 const env: NodeJS.ProcessEnv = { ...process.env, SCANNER_TOKEN: 'smoke' };
@@ -37,20 +38,52 @@ function smokeConfig(overrides: Partial<AppConfig> = {}): Partial<AppConfig> {
 const VULNERABLE_APP = resolve(__dirname, 'fixtures', 'vulnerable-app');
 
 interface Finding {
-  severity: string;
+  severity: (typeof FINDING_SEVERITIES)[number];
   title: string;
+  category?: string;
   location: { file: string; line?: number };
+}
+
+/** A vulnerability planted in the sample codebase, and how to recognise the Finding reporting it (by `category`, or an English or Italian title). */
+interface Planted {
+  file: RegExp;
+  line: number;
+  kind: RegExp;
+}
+
+const PLANTED: Record<string, Planted> = {
+  'SQL injection': { file: /^src\/server\.js$/, line: 15, kind: /sql/i },
+  'command injection': { file: /^src\/server\.js$/, line: 20, kind: /comman|comand|shell|exec|rce/i },
+  'path traversal': { file: /^src\/server\.js$/, line: 24, kind: /path|percors|traversal|file/i },
+  'fallback JWT secret': { file: /^src\/(config|auth)\.js$/, line: 4, kind: /secret|segret|jwt|default|predefinit|credential|credenzial|hardcoded/i },
+};
+
+/** The planted vulnerabilities no Finding reports: each needs its own Finding, on its line (±3), of its kind. */
+function missedPlanted(findings: Finding[]): string[] {
+  const unused = [...findings];
+  return Object.entries(PLANTED)
+    .filter(([, p]) => {
+      const i = unused.findIndex(
+        (f) =>
+          p.file.test(f.location.file.replace(/^\.\//, '')) &&
+          f.location.line !== undefined &&
+          Math.abs(f.location.line - p.line) <= 3 &&
+          p.kind.test(`${f.category ?? ''} ${f.title}`),
+      );
+      if (i >= 0) unused.splice(i, 1);
+      return i < 0;
+    })
+    .map(([name]) => name);
+}
+
+/** Whether the text reads as Italian: enough words other Romance languages do not share. */
+function looksItalian(text: string): boolean {
+  return (text.match(/\b(il|che|della|delle|degli|nella|sono|questo|questa)\b/gi)?.length ?? 0) > 10;
 }
 
 /** Every file under `dir`, keyed by its `/`-separated path relative to `dir`, for makeZip. */
 function fixtureFiles(dir: string): Record<string, string> {
-  const files: Record<string, string> = {};
-  for (const e of readdirSync(dir, { withFileTypes: true, recursive: true })) {
-    if (!e.isFile()) continue;
-    const path = join(e.parentPath, e.name);
-    files[relative(dir, path).split(sep).join('/')] = readFileSync(path, 'utf8');
-  }
-  return files;
+  return Object.fromEntries(filesUnder(dir).map((path) => [relative(dir, path).split(sep).join('/'), readFileSync(path, 'utf8')]));
 }
 
 /** Agent containers of the Scan that still exist. */
@@ -271,17 +304,12 @@ const connect = (authority) => new Promise((done) => {
       expect(status).toMatchObject({ state: 'succeeded' });
 
       const report = (await h.api.get('/api/scan/real/artifacts/report.md')).text;
-      expect(report.match(/\b(il|la|di|che|non|per|della|delle)\b/gi)?.length ?? 0).toBeGreaterThan(20);
+      expect(looksItalian(report)).toBe(true);
+      expect(report).toContain('legacy/'); // the Report says what the caller's instructions left out
 
       const { findings } = (await h.api.get('/api/scan/real/artifacts/findings.json')).body as { findings: Finding[] };
-      const near = (file: string | RegExp, line: number) => (f: Finding) =>
-        (typeof file === 'string' ? f.location.file === file : file.test(f.location.file)) &&
-        (f.location.line === undefined || Math.abs(f.location.line - line) <= 3);
-      expect(findings.some(near('src/server.js', 15))).toBe(true); // SQL injection
-      expect(findings.some(near('src/server.js', 20))).toBe(true); // command injection
-      expect(findings.some(near('src/server.js', 24))).toBe(true); // path traversal
-      expect(findings.some(near(/^src\/(config|auth)\.js$/, 4))).toBe(true); // fallback JWT secret
-      expect(findings.filter((f) => f.location.file.startsWith('legacy/'))).toEqual([]);
+      expect(missedPlanted(findings)).toEqual([]);
+      expect(findings.filter((f) => f.location.file.replace(/^\.\//, '').startsWith('legacy/'))).toEqual([]);
       expect(containersOf('real')).toEqual([]);
     }, 30 * MINUTE_MS);
   });

@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { readdirSync } from 'node:fs';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -149,6 +150,13 @@ export interface ZipEntry {
 }
 
 /** A zip with the given entries; plain strings are stored uncompressed. */
+/** The paths of every file under `dir`, recursively. */
+export function filesUnder(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true, recursive: true })
+    .filter((e) => e.isFile())
+    .map((e) => join(e.parentPath, e.name));
+}
+
 export function makeZip(entries: Record<string, string | ZipEntry> = { 'src/index.js': 'console.log(1)\n' }): Buffer {
   const parts: Buffer[] = [];
   const central: Buffer[] = [];

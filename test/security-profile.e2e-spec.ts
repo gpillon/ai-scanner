@@ -4,7 +4,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { Harness, startApp } from './harness';
+import { filesUnder, Harness, startApp } from './harness';
 
 const profileDir = resolve(__dirname, '..', 'profiles', 'security');
 const skillsDir = join(profileDir, 'skills');
@@ -25,14 +25,8 @@ function frontmatter(skillMd: string): Record<string, string> {
   return fields;
 }
 
-function markdownFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true, recursive: true })
-    .filter((e) => e.isFile() && e.name.endsWith('.md'))
-    .map((e) => join(e.parentPath, e.name));
-}
-
 describe('the security Scan Profile', () => {
-  it('brings the skills chosen in #5', () => {
+  it('brings its four skills', () => {
     expect(skills.sort()).toEqual(['insecure-defaults', 'security-review', 'sharp-edges', 'vulnerability-triage-brocards']);
   });
 
@@ -43,13 +37,14 @@ describe('the security Scan Profile', () => {
       const meta = frontmatter(readFileSync(skillMd, 'utf8'));
       expect(meta.name).toBe(skill);
       expect(meta.name).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+      expect(meta.description).not.toMatch(/^[>|]/); // a YAML block scalar: keep it on one line
       expect(meta.description?.length).toBeGreaterThan(0);
       expect(meta.description.length).toBeLessThanOrEqual(1024);
     });
 
     it('links only to files it ships', () => {
       const missing: string[] = [];
-      for (const file of markdownFiles(join(skillsDir, skill))) {
+      for (const file of filesUnder(join(skillsDir, skill)).filter((f) => f.endsWith('.md'))) {
         for (const [, target] of readFileSync(file, 'utf8').matchAll(/\]\(([^)#\s]+)(?:#[^)]*)?\)/g)) {
           if (/^[a-z]+:/i.test(target)) continue;
           if (!existsSync(join(dirname(file), target))) missing.push(`${file} -> ${target}`);
