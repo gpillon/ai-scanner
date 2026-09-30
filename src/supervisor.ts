@@ -107,6 +107,8 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
 
   /** Scans left `running` by a restart are failed as interrupted; `queued` ones start again. */
   async onModuleInit(): Promise<void> {
+    // Claimed just before the server stopped, but no Attempt ever started: still queued.
+    await this.scans.update({ state: 'running', attempts: 0 }, { state: 'queued', startedAt: null });
     await this.scans.update(
       { state: 'running' },
       { state: 'failed', failureReason: 'Interrupted by a server restart', finishedAt: this.clock.now().toISOString() },

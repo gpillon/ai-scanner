@@ -255,6 +255,21 @@ describe('Scan Supervisor', () => {
       expect(h.runner.stopCalls).toEqual(['s1', 's1']);
     });
 
+    it('fails a Scan whose Attempt leaves valid Artifacts only after the Scan timeout', async () => {
+      await start();
+      h.runner.script = async (req, ctl) => {
+        await scripts.writeReport(REPORT)(req, ctl);
+        h.clock.advance(60 * MINUTE);
+      };
+      await h.submit('s1');
+      const status = await h.waitForState('s1', 'failed');
+      expect(status.failureReason).toBe('Scan timed out after 60 min');
+      expect(status.artifacts).toBeUndefined();
+      for (const name of ['report.md', 'report.pdf', 'findings.json']) {
+        expect((await h.api.get(`/api/scan/s1/artifacts/${name}`)).status).toBe(404);
+      }
+    });
+
     it('counts the Scan timeout from when the Scan starts, not while it is queued', async () => {
       await start({ config: { concurrency: 1, attemptTimeoutMs: 100 * MINUTE, scanTimeoutMs: 60 * MINUTE } });
       const gate = new Gate();
