@@ -17,3 +17,24 @@
   min-height: 75vh;
   border: 0;
 }
+
+/* Scan page header: id and copy button together, the state apart, the subtitle below. */
+.app-scan-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--lg);
+}
+
+.app-scan-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--xs);
+  min-width: 0;
+  word-break: break-all;
+}
+
+.app-scan-subtitle {
+  margin-top: var(--pf-t--global--spacer--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}

@@ -6,7 +6,6 @@ import {
   Card,
   CardBody,
   CardTitle,
-  ClipboardCopy,
   Content,
   DescriptionList,
   DescriptionListDescription,
@@ -31,7 +30,9 @@ import {
   Stack,
   StackItem,
   Title,
+  Tooltip,
 } from '@patternfly/react-core';
+import CopyIcon from '@patternfly/react-icons/dist/esm/icons/copy-icon';
 import DownloadIcon from '@patternfly/react-icons/dist/esm/icons/download-icon';
 import SearchIcon from '@patternfly/react-icons/dist/esm/icons/search-icon';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
@@ -105,6 +106,13 @@ export function ScanDetailPage({ id }: { id: string }) {
     };
   }, [id]);
 
+  const [copied, setCopied] = useState(false);
+  async function copyId() {
+    await navigator.clipboard.writeText(id);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
   async function download(name: string) {
     try {
       saveBlob(await api.artifact(id, name), `${id}-${name}`);
@@ -160,14 +168,16 @@ export function ScanDetailPage({ id }: { id: string }) {
       <PageSection>
         <Split hasGutter>
           <SplitItem isFilled>
-            <Content>
-              <Title headingLevel="h1">
-                Scan {scan && <ScanStateLabel state={scan.state} />}
-              </Title>
-            </Content>
-            <ClipboardCopy isReadOnly hoverTip="Copy id" clickTip="Copied" variant="inline-compact">
-              {id}
-            </ClipboardCopy>
+            <div className="app-scan-header">
+              <span className="app-scan-title">
+                <Title headingLevel="h1">{id}</Title>
+                <Tooltip content={copied ? 'Copied' : 'Copy id'}>
+                  <Button variant="plain" size="sm" icon={<CopyIcon />} aria-label="Copy id" onClick={copyId} />
+                </Tooltip>
+              </span>
+              {scan && <ScanStateLabel state={scan.state} />}
+            </div>
+            <p className="app-scan-subtitle">{scan ? `Scan · ${scan.profile} · ${scan.model}` : 'Scan'}</p>
           </SplitItem>
           <SplitItem>
             <Button variant="danger" onClick={() => setConfirmDelete(true)} isDisabled={!scan}>
