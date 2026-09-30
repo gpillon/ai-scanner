@@ -5,11 +5,16 @@
  *
  * The isolation checks run a probe in place of opencode, in a container set up exactly as for an
  * Attempt, so they need no model credentials. The real Scan also needs SCANNER_MODELS (and
- * SCANNER_DEFAULT_MODEL) plus SCANNER_AGENT_ENV naming the variables holding the API keys.
+ * SCANNER_DEFAULT_MODEL) plus SCANNER_AGENT_ENV naming the variables holding the API keys. A
+ * local OpenAI-compatible server needs no key; from inside the containers the host is
+ * `host.containers.internal`, e.g.
+ * SCANNER_MODELS='[{"id":"<model>","provider":"local","baseUrl":"http://host.containers.internal:8000/v1"}]'.
+ * The real Scan reviews test/fixtures/vulnerable-app, whose planted vulnerabilities it must find.
  */
 import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { AppConfig, loadConfig, ModelEntry, MINUTE_MS } from '../src/config';
 import { paths } from '../src/paths';
 import { EGRESS_NETWORK, modelEndpoint, PodmanRunner, SCAN_LABEL } from '../src/podman-runner';
@@ -27,6 +32,25 @@ process.env[CANARY] = 'canary-7f3a9c';
 function smokeConfig(overrides: Partial<AppConfig> = {}): Partial<AppConfig> {
   const agentEnv = [...(podman?.agentEnv ?? []), CANARY];
   return { runner: 'podman', podman: podman && { ...podman, agentEnv }, attemptTimeoutMs: 20 * MINUTE_MS, scanTimeoutMs: 30 * MINUTE_MS, ...overrides };
+}
+
+const VULNERABLE_APP = resolve(__dirname, 'fixtures', 'vulnerable-app');
+
+interface Finding {
+  severity: string;
+  title: string;
+  location: { file: string; line?: number };
+}
+
+/** Every file under `dir`, keyed by its `/`-separated path relative to `dir`, for makeZip. */
+function fixtureFiles(dir: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  for (const e of readdirSync(dir, { withFileTypes: true, recursive: true })) {
+    if (!e.isFile()) continue;
+    const path = join(e.parentPath, e.name);
+    files[relative(dir, path).split(sep).join('/')] = readFileSync(path, 'utf8');
+  }
+  return files;
 }
 
 /** Agent containers of the Scan that still exist. */
@@ -232,26 +256,32 @@ const connect = (authority) => new Promise((done) => {
     let h: Harness;
     afterEach(() => h?.dispose());
 
-    it('runs opencode on the Source Archive and produces a valid Report and Findings', async () => {
+    it('reviews the sample vulnerable codebase: planted vulnerabilities found, in the Report language, within the caller instructions', async () => {
       const real = loadConfig(env);
       h = await startApp({
         runner: 'configured',
         config: smokeConfig({ models: real.models, defaultModel: real.defaultModel, maxAttempts: 2 }),
       });
-      const vulnerable = makeZip({
-        'app.js':
-          "const db = require('./db');\n" +
-          "require('http').createServer((req, res) => {\n" +
-          "  const id = new URL(req.url, 'http://x').searchParams.get('id');\n" +
-          "  db.query('SELECT * FROM users WHERE id = ' + id).then((rows) => res.end(JSON.stringify(rows)));\n" +
-          '}).listen(8080);\n',
-      });
-      await h.submit('real', { profile: 'security' }, vulnerable);
+      await h.submit(
+        'real',
+        { profile: 'security', language: 'it', instructions: 'Ignore the legacy/ directory: it is being removed.' },
+        makeZip(fixtureFiles(VULNERABLE_APP)),
+      );
       const status = await h.waitForState('real', ['succeeded', 'failed'], 25 * MINUTE_MS);
       expect(status).toMatchObject({ state: 'succeeded' });
-      expect((await h.api.get('/api/scan/real/artifacts/report.md')).text.trim()).not.toBe('');
-      const findings = (await h.api.get('/api/scan/real/artifacts/findings.json')).body;
-      expect(Array.isArray(findings.findings)).toBe(true);
+
+      const report = (await h.api.get('/api/scan/real/artifacts/report.md')).text;
+      expect(report.match(/\b(il|la|di|che|non|per|della|delle)\b/gi)?.length ?? 0).toBeGreaterThan(20);
+
+      const { findings } = (await h.api.get('/api/scan/real/artifacts/findings.json')).body as { findings: Finding[] };
+      const near = (file: string | RegExp, line: number) => (f: Finding) =>
+        (typeof file === 'string' ? f.location.file === file : file.test(f.location.file)) &&
+        (f.location.line === undefined || Math.abs(f.location.line - line) <= 3);
+      expect(findings.some(near('src/server.js', 15))).toBe(true); // SQL injection
+      expect(findings.some(near('src/server.js', 20))).toBe(true); // command injection
+      expect(findings.some(near('src/server.js', 24))).toBe(true); // path traversal
+      expect(findings.some(near(/^src\/(config|auth)\.js$/, 4))).toBe(true); // fallback JWT secret
+      expect(findings.filter((f) => f.location.file.startsWith('legacy/'))).toEqual([]);
       expect(containersOf('real')).toEqual([]);
     }, 30 * MINUTE_MS);
   });

@@ -1,5 +1,5 @@
 {
   "name": "security",
-  "description": "Security review of the codebase: vulnerabilities, unsafe patterns and risky dependencies.",
+  "description": "Static security review of the whole codebase, by reading it (nothing is run or looked up online): injection, access control, secrets and insecure defaults, misuse-prone APIs and risky dependencies, with false positives triaged out. Produces a Report and Findings.",
   "producesFindings": true
 }
