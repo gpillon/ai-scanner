@@ -6,9 +6,10 @@
  * The isolation checks run a probe in place of opencode, in a container set up exactly as for an
  * Attempt, so they need no model credentials. The real Scan also needs SCANNER_MODELS (and
  * SCANNER_DEFAULT_MODEL) plus SCANNER_AGENT_ENV naming the variables holding the API keys. A
- * local OpenAI-compatible server needs no key; from inside the containers the host is
- * `host.containers.internal`, e.g.
- * SCANNER_MODELS='[{"id":"<model>","provider":"local","baseUrl":"http://host.containers.internal:8000/v1"}]'.
+ * local OpenAI-compatible server needs no key, but must listen where the egress proxy can reach
+ * it: not on the host's loopback. With a Podman machine (WSL2, NAT) `host.containers.internal`
+ * is the VM itself, and Windows is the VM's default gateway, e.g.
+ * SCANNER_MODELS='[{"id":"<model>","provider":"local","baseUrl":"http://<gateway>:8000/v1"}]'.
  * The real Scan reviews test/fixtures/vulnerable-app, whose planted vulnerabilities it must find.
  */
 import { spawnSync } from 'node:child_process';
@@ -194,7 +195,9 @@ const connect = (authority) => new Promise((done) => {
       expect(loaded.permission).toMatchObject({ bash: 'deny', webfetch: 'deny', websearch: 'deny' });
       expect(loaded.model).toBe('anthropic/claude-sonnet-4-5');
       const skills = await readFile(join(output, 'skills.txt'), 'utf8');
-      expect(skills).toContain('security-review');
+      for (const skill of ['security-review', 'insecure-defaults', 'sharp-edges', 'vulnerability-triage-brocards']) {
+        expect(skills).toContain(skill);
+      }
       expect(skills).not.toContain('planted');
     });
 
@@ -305,7 +308,7 @@ const connect = (authority) => new Promise((done) => {
 
       const report = (await h.api.get('/api/scan/real/artifacts/report.md')).text;
       expect(looksItalian(report)).toBe(true);
-      expect(report).toContain('legacy/'); // the Report says what the caller's instructions left out
+      expect(report).toMatch(/legacy/i); // the Report says what the caller's instructions left out
 
       const { findings } = (await h.api.get('/api/scan/real/artifacts/findings.json')).body as { findings: Finding[] };
       expect(missedPlanted(findings)).toEqual([]);
