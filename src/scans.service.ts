@@ -86,8 +86,12 @@ export class ScansService {
     if (await this.scans.existsBy({ id: input.id })) throw new ConflictException(`Scan ${input.id} already exists`);
     try {
       await this.scans.insert(scan);
-    } catch {
-      throw new ConflictException(`Scan ${input.id} already exists`);
+    } catch (e) {
+      // Lost a race with a concurrent POST of the same id; anything else is a real failure.
+      if ((e as { code?: string }).code?.startsWith('SQLITE_CONSTRAINT')) {
+        throw new ConflictException(`Scan ${input.id} already exists`);
+      }
+      throw e;
     }
 
     try {
