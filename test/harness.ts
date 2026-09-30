@@ -13,8 +13,6 @@ import { RetentionSweeper } from '../src/retention-sweeper';
 
 export const TOKEN = 'test-token';
 
-export const MINUTE = MINUTE_MS;
-
 /** Time moves only on `advance`, which fires the timers that come due, earliest first. */
 export class FakeClock extends Clock {
   private timers: { due: number; fire: () => void }[] = [];
@@ -225,8 +223,8 @@ export function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}):
     retentionDays: 365,
     sweepIntervalMs: 0,
     maxAttempts: 3,
-    attemptTimeoutMs: 20 * MINUTE,
-    scanTimeoutMs: 60 * MINUTE,
+    attemptTimeoutMs: 20 * MINUTE_MS,
+    scanTimeoutMs: 60 * MINUTE_MS,
     concurrency: 2,
     ...overrides,
   };
@@ -307,4 +305,9 @@ export const settle = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 export async function listFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { recursive: true });
   return entries.map(String);
+}
+
+/** Paths under a directory that belong to the Scan: one of their segments is its id. */
+export async function filesOf(dir: string, scanId: string): Promise<string[]> {
+  return (await listFiles(dir)).filter((f) => f.split(/[\\/]/).includes(scanId));
 }

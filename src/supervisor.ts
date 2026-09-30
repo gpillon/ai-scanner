@@ -225,6 +225,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
         await mkdir(dirname(transcriptPath), { recursive: true });
         await this.scans.update(id, { attempts: attempt });
         if (this.lettingGo(id)) return;
+        if (scanTimedOut) return await this.fail(id, scanTimeoutReason);
 
         const end = await this.runAttempt(
           {
@@ -246,11 +247,12 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
           ? { valid: false as const, reason: end.problem }
           : await checkOutput(outputDir, profile.producesFindings);
         if (this.lettingGo(id)) return;
+        if (scanTimedOut) return await this.fail(id, scanTimeoutReason);
         if (check.valid) return await this.succeed(id, outputDir, check.artifacts);
         problem = check.reason;
-        this.log.warn(`Scan ${id} Attempt ${attempt} has no valid output: ${problem}`);
+        this.log.warn(`Scan ${id} Attempt ${attempt} left no valid Artifacts: ${problem}`);
       }
-      await this.fail(id, `No valid output after ${this.config.maxAttempts} Attempts (last: ${problem})`);
+      await this.fail(id, `No valid Artifacts after ${this.config.maxAttempts} Attempts (last: ${problem})`);
     } finally {
       scanTimer.cancel();
     }

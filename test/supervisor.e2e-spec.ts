@@ -1,13 +1,13 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { MINUTE_MS as MINUTE } from '../src/config';
 import { PREVIOUS_ATTEMPT_NOTE } from '../src/supervisor';
 import {
   FakeRunner,
   Gate,
+  filesOf,
   Harness,
-  listFiles,
-  MINUTE,
   SAMPLE_FINDINGS,
   Script,
   scripts,
@@ -27,16 +27,16 @@ describe('Scan Supervisor', () => {
     return h;
   }
 
-  /** Contents of every internal file kept for the Scan, whatever the on-disk layout. */
+  /** Contents of every internal file kept for the Scan. */
   async function internalFiles(id: string): Promise<string[]> {
-    const files = (await listFiles(h.dataDir)).filter((f) => f.split(/[\\/]/).includes(id));
+    const files = await filesOf(h.dataDir, id);
     const contents: string[] = [];
     for (const f of files) contents.push(await readFile(join(h.dataDir, f), 'utf8').catch(() => ''));
     return contents;
   }
 
   describe('Attempts', () => {
-    it('starts a new Attempt on the same workspace when an Attempt has no valid output', async () => {
+    it('starts a new Attempt on the same workspace when an Attempt leaves no valid Artifacts', async () => {
       await start();
       h.runner.script = scripts.perAttempt(scripts.writeNothing(), scripts.writeReport(REPORT));
       await h.submit('s1');
@@ -48,7 +48,7 @@ describe('Scan Supervisor', () => {
       expect(second.outputDir).toBe(first.outputDir);
     });
 
-    it('lets a new Attempt finish the partial output of the previous one', async () => {
+    it('lets a new Attempt finish the partial Artifacts of the previous one', async () => {
       await start();
       h.runner.script = scripts.perAttempt(
         scripts.writeReportOnly(REPORT),
@@ -78,7 +78,7 @@ describe('Scan Supervisor', () => {
       ['writes an empty report.md', scripts.writeEmptyReport(), /report\.md is empty/],
       ['writes a report.md of only whitespace', scripts.writeReportOnly(' \n\t\n'), /report\.md is empty/],
       ['crashes', scripts.crash(), /crashed/],
-      ['exits non-zero, even with valid output', scripts.exit(1), /exited with code 1/],
+      ['exits non-zero, even with valid Artifacts', scripts.exit(1), /exited with code 1/],
       ['writes no findings.json', scripts.writeReportOnly(), /findings\.json is missing/],
     ])('fails after 3 Attempts when every Attempt %s', async (_name, script, reason) => {
       await start();
@@ -86,7 +86,7 @@ describe('Scan Supervisor', () => {
       await h.submit('s1');
       const status = await h.waitForState('s1', 'failed');
       expect(status.attempts).toBe(3);
-      expect(status.failureReason).toMatch(/No valid output after 3 Attempts/);
+      expect(status.failureReason).toMatch(/No valid Artifacts after 3 Attempts/);
       expect(status.failureReason).toMatch(reason);
       expect(h.runner.calls).toHaveLength(3);
     });
@@ -97,7 +97,7 @@ describe('Scan Supervisor', () => {
       await h.submit('s1');
       const status = await h.waitForState('s1', 'failed');
       expect(status.attempts).toBe(2);
-      expect(status.failureReason).toMatch(/No valid output after 2 Attempts/);
+      expect(status.failureReason).toMatch(/No valid Artifacts after 2 Attempts/);
       expect(h.runner.calls).toHaveLength(2);
     });
 
@@ -178,7 +178,7 @@ describe('Scan Supervisor', () => {
   });
 
   describe('a failed Scan', () => {
-    it('exposes no Artifacts, even when part of its output is valid', async () => {
+    it('exposes no Artifacts, even when some of them are valid', async () => {
       await start();
       h.runner.script = scripts.perAttempt(async (req, ctl) => {
         await scripts.writeReportOnly(REPORT)(req, ctl);
@@ -192,7 +192,7 @@ describe('Scan Supervisor', () => {
       }
     });
 
-    it("keeps partial output and each Attempt's transcript internally until the Scan is deleted", async () => {
+    it("keeps partial Artifacts and each Attempt's transcript internally until the Scan is deleted", async () => {
       await start();
       h.runner.script = scripts.writeReportOnly(REPORT);
       await h.submit('s1');
@@ -234,7 +234,7 @@ describe('Scan Supervisor', () => {
       }
       const status = await h.waitForState('s1', 'failed');
       expect(status.attempts).toBe(3);
-      expect(status.failureReason).toMatch(/No valid output after 3 Attempts.*timed out after 20 min/);
+      expect(status.failureReason).toMatch(/No valid Artifacts after 3 Attempts.*timed out after 20 min/);
       expect(h.runner.stopCalls).toEqual(['s1', 's1', 's1']);
     });
 
@@ -394,7 +394,7 @@ describe('Scan Supervisor', () => {
       await h.waitForState('s1', 'succeeded');
       await settle();
       expect(h.runner.started()).toEqual(['s1']);
-      expect((await listFiles(h.dataDir)).filter((f) => f.split(/[\\/]/).includes('s2'))).toEqual([]);
+      expect(await filesOf(h.dataDir, 's2')).toEqual([]);
 
       h.runner.script = scripts.writeReport();
       expect((await h.submit('s2')).status).toBe(201);
