@@ -327,10 +327,11 @@ export async function waitUntil(
   condition: () => boolean | Promise<boolean>,
   what = 'condition',
   timeoutMs = 3000,
+  intervalMs = 10,
 ): Promise<void> {
   for (const deadline = Date.now() + timeoutMs; Date.now() < deadline; ) {
     if (await condition()) return;
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
   throw new Error(`Timed out waiting for ${what}`);
 }

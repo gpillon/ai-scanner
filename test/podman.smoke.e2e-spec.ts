@@ -13,14 +13,14 @@
  * The real Scan reviews test/fixtures/vulnerable-app, whose planted vulnerabilities it must find.
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join, relative, resolve, sep } from 'node:path';
+import { join } from 'node:path';
 import { AppConfig, loadConfig, ModelEntry, MINUTE_MS } from '../src/config';
 import { paths } from '../src/paths';
-import { EGRESS_NETWORK, modelEndpoint, PodmanRunner, SCAN_LABEL } from '../src/podman-runner';
-import { FINDING_SEVERITIES } from '../src/output-validator';
-import { filesUnder, Harness, makeZip, startApp, testConfig, waitUntil } from './harness';
+import { modelEndpoint, PodmanRunner, SCAN_LABEL } from '../src/podman-runner';
+import { Harness, makeZip, startApp, testConfig, waitUntil } from './harness';
+import * as pods from './podman';
+import { Finding, findingFile, fixtureFiles, looksItalian, missedPlanted, VULNERABLE_APP } from './real-scan';
 
 const enabled = process.env.SCANNER_SMOKE === '1';
 const env: NodeJS.ProcessEnv = { ...process.env, SCANNER_TOKEN: 'smoke' };
@@ -36,62 +36,8 @@ function smokeConfig(overrides: Partial<AppConfig> = {}): Partial<AppConfig> {
   return { runner: 'podman', podman: podman && { ...podman, agentEnv }, attemptTimeoutMs: 20 * MINUTE_MS, scanTimeoutMs: 30 * MINUTE_MS, ...overrides };
 }
 
-const VULNERABLE_APP = resolve(__dirname, 'fixtures', 'vulnerable-app');
-
-interface Finding {
-  severity: (typeof FINDING_SEVERITIES)[number];
-  title: string;
-  category?: string;
-  location: { file: string; line?: number };
-}
-
-/** A vulnerability planted in the sample codebase, and how to recognise the Finding reporting it (by `category`, or an English or Italian title). */
-interface Planted {
-  file: RegExp;
-  line: number;
-  kind: RegExp;
-}
-
-const PLANTED: Record<string, Planted> = {
-  'SQL injection': { file: /^src\/server\.js$/, line: 15, kind: /sql/i },
-  'command injection': { file: /^src\/server\.js$/, line: 20, kind: /comman|comand|shell|exec|rce/i },
-  'path traversal': { file: /^src\/server\.js$/, line: 24, kind: /path|percors|traversal|file/i },
-  'fallback JWT secret': { file: /^src\/(config|auth)\.js$/, line: 4, kind: /secret|segret|jwt|default|predefinit|credential|credenzial|hardcoded/i },
-};
-
-/** The planted vulnerabilities no Finding reports: each needs its own Finding, on its line (±3), of its kind. */
-function missedPlanted(findings: Finding[]): string[] {
-  const unused = [...findings];
-  return Object.entries(PLANTED)
-    .filter(([, p]) => {
-      const i = unused.findIndex(
-        (f) =>
-          p.file.test(f.location.file.replace(/^\.\//, '')) &&
-          f.location.line !== undefined &&
-          Math.abs(f.location.line - p.line) <= 3 &&
-          p.kind.test(`${f.category ?? ''} ${f.title}`),
-      );
-      if (i >= 0) unused.splice(i, 1);
-      return i < 0;
-    })
-    .map(([name]) => name);
-}
-
-/** Whether the text reads as Italian: enough words other Romance languages do not share. */
-function looksItalian(text: string): boolean {
-  return (text.match(/\b(il|che|della|delle|degli|nella|sono|questo|questa)\b/gi)?.length ?? 0) > 10;
-}
-
-/** Every file under `dir`, keyed by its `/`-separated path relative to `dir`, for makeZip. */
-function fixtureFiles(dir: string): Record<string, string> {
-  return Object.fromEntries(filesUnder(dir).map((path) => [relative(dir, path).split(sep).join('/'), readFileSync(path, 'utf8')]));
-}
-
 /** Agent containers of the Scan that still exist. */
-function containersOf(scanId: string): string[] {
-  const ps = spawnSync(podman!.executable, ['ps', '-aq', '--filter', `label=${SCAN_LABEL}=${scanId}`], { encoding: 'utf8' });
-  return ps.stdout.split(/\s+/).filter(Boolean);
-}
+const containersOf = (scanId: string) => pods.containersOf(podman!, scanId);
 
 /** Runs `script` with Node in place of opencode; everything else is as for a real Attempt. */
 class ProbeRunner extends PodmanRunner {
@@ -229,27 +175,19 @@ const connect = (authority) => new Promise((done) => {
   });
 
   describe('a Scan with a scripted model', () => {
-    const MOCK = 'ai-scanner-smoke-llm';
-    const pod = (...args: string[]) => spawnSync(podman!.executable, args, { encoding: 'utf8' });
-    beforeAll(() => {
-      if (pod('network', 'exists', EGRESS_NETWORK).status !== 0) pod('network', 'create', EGRESS_NETWORK);
-      pod('rm', '--force', '--ignore', MOCK);
-      const run = pod('run', '--detach', '--name', MOCK, '--network', EGRESS_NETWORK,
-        '--volume', `${resolve(__dirname, 'mock-llm.js')}:/mock-llm.js:ro`, podman!.proxyImage, 'node', '/mock-llm.js');
-      if (run.status !== 0) throw new Error(run.stderr);
-    });
-    afterAll(() => void pod('rm', '--force', '--ignore', MOCK));
+    beforeAll(() => pods.startScriptedModel(podman!));
+    afterAll(() => pods.stopScriptedModel(podman!));
 
     let h: Harness;
     afterEach(() => h?.dispose());
 
     it('runs opencode through the egress proxy and stores the Artifacts it writes to /output', async () => {
-      const model: ModelEntry = { id: 'mock', provider: 'mockllm', baseUrl: `http://${MOCK}:8000/v1` };
+      const model = pods.scriptedModel();
       h = await startApp({ runner: 'configured', config: smokeConfig({ models: [model], defaultModel: model.id }) });
       await h.submit('scripted', { profile: 'security', instructions: 'Focus on "injection" & <tags>' });
       const status = await h.waitForState('scripted', ['succeeded', 'failed'], 5 * MINUTE_MS);
       expect(status).toMatchObject({ state: 'succeeded', attempts: 1 });
-      expect((await h.api.get('/api/scan/scripted/artifacts/report.md')).text).toMatch(/SQL injection in app\.js/);
+      expect((await h.api.get('/api/scan/scripted/artifacts/report.md')).text).toMatch(/model mock\.\n\nOne Finding: SQL injection in app\.js/);
       expect((await h.api.get('/api/scan/scripted/artifacts/findings.json')).body.findings[0]).toMatchObject({
         severity: 'high',
         location: { file: 'app.js', line: 4 },
@@ -262,7 +200,7 @@ const connect = (authority) => new Promise((done) => {
 
     it('writes the Artifacts when the Source Archive is a git repository', async () => {
       // Callers often zip a checkout. The image has no git, so opencode keeps / as the worktree.
-      const model: ModelEntry = { id: 'mock', provider: 'mockllm', baseUrl: `http://${MOCK}:8000/v1` };
+      const model = pods.scriptedModel();
       h = await startApp({ runner: 'configured', config: smokeConfig({ models: [model], defaultModel: model.id, maxAttempts: 1 }) });
       const repo = makeZip({
         '.git/HEAD': 'ref: refs/heads/main\n',
@@ -276,7 +214,7 @@ const connect = (authority) => new Promise((done) => {
     });
 
     it('keeps the API keys in the agent environment out of reach of its read and grep tools', async () => {
-      const model: ModelEntry = { id: 'mock', provider: 'mockllm', baseUrl: `http://${MOCK}:8000/v1` };
+      const model = pods.scriptedModel();
       h = await startApp({ runner: 'configured', config: smokeConfig({ models: [model], defaultModel: model.id, maxAttempts: 1 }) });
       // The scripted model reads and greps /proc, then copies the three results into report.md.
       await h.submit('leak', { profile: 'security', instructions: 'LEAK-PROBE' });
@@ -312,7 +250,7 @@ const connect = (authority) => new Promise((done) => {
 
       const { findings } = (await h.api.get('/api/scan/real/artifacts/findings.json')).body as { findings: Finding[] };
       expect(missedPlanted(findings)).toEqual([]);
-      expect(findings.filter((f) => f.location.file.replace(/^\.\//, '').startsWith('legacy/'))).toEqual([]);
+      expect(findings.filter((f) => findingFile(f).startsWith('legacy/'))).toEqual([]);
       expect(containersOf('real')).toEqual([]);
     }, 30 * MINUTE_MS);
   });

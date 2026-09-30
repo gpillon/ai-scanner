@@ -1,12 +1,12 @@
 'use strict';
-// A scripted OpenAI-compatible model for the Podman smoke tests: it makes the agent write
-// /output/report.md, then /output/findings.json, then stops. Streams, as opencode asks.
-// PORT: where to listen (default 8000).
+// A scripted OpenAI-compatible model for the Podman smoke tests and the e2e gate: it makes the
+// agent write /output/report.md, naming the model it was asked for, then /output/findings.json,
+// then stops. Streams, as opencode asks. PORT: where to listen (default 8000).
 
 const http = require('node:http');
 
-const STEPS = [
-  { filePath: '/output/report.md', content: '# Security Report\n\nOne Finding: SQL injection in app.js.\n' },
+const steps = (model) => [
+  { filePath: '/output/report.md', content: `# Security Report\n\nWritten by model ${model}.\n\nOne Finding: SQL injection in app.js.\n` },
   {
     filePath: '/output/findings.json',
     content: JSON.stringify({
@@ -28,7 +28,10 @@ http
     req.on('data', (c) => (raw += c));
     req.on('end', () => {
       const body = raw ? JSON.parse(raw) : {};
-      const done = (body.messages || []).filter((m) => m.role === 'tool').length;
+      const messages = body.messages || [];
+      // Caller instructions containing HANG-PROBE keep the Attempt running: no reply ever comes.
+      if (JSON.stringify(messages).includes('HANG-PROBE')) return;
+      const done = messages.filter((m) => m.role === 'tool').length;
       const tools = (body.tools || []).map((t) => t.function && t.function.name);
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const chunk = (delta, finish = null) =>
@@ -40,7 +43,6 @@ http
         chunk({ tool_calls: [{ index: 0, function: { arguments: JSON.stringify(args) } }] });
         chunk({}, 'tool_calls');
       };
-      const messages = body.messages || [];
       // Caller instructions containing LEAK-PROBE play a prompt injection: read and search the
       // process environment, which holds the API keys, and copy whatever came back into the Report.
       if (JSON.stringify(messages).includes('LEAK-PROBE')) {
@@ -54,8 +56,8 @@ http
           chunk({ role: 'assistant', content: 'Done.' });
           chunk({}, 'stop');
         }
-      } else if (STEPS[done] && tools.includes('write')) {
-        call('write', STEPS[done]);
+      } else if (steps(body.model)[done] && tools.includes('write')) {
+        call('write', steps(body.model)[done]);
       } else {
         chunk({ role: 'assistant', content: 'Done.' });
         chunk({}, 'stop');
