@@ -45,7 +45,9 @@ const EVIDENCE = resolve(process.env.SCANNER_GATE_EVIDENCE ?? join(__dirname, '.
 
 /** Scans of the scripted model: one writes its Report at once, the other's Attempts never end. */
 const SCRIPTED_SCAN = { profile: 'security', model: SCRIPTED.id };
-const HANGING_SCAN = { profile: 'security', model: SCRIPTED.id, instructions: 'HANG-PROBE' };
+const HANG = 'HANG-PROBE';
+const HANGING_SCAN = { profile: 'security', model: SCRIPTED.id, instructions: HANG };
+const ENDED = ['succeeded', 'failed'];
 const SOURCE = makeZip({ 'app.js': 'console.log(1)\n' });
 
 /** Scan ids by the scenario that ran them. */
@@ -55,13 +57,13 @@ const scenarios: Record<string, string[]> = {};
  * Saves the Scan's status, and the named Artifacts and the Attempt transcripts, as evidence of the
  * current scenario, under the Scan id or `as` when a scenario keeps the same id twice.
  */
-async function keep(
+async function saveEvidence(
   server: ServerProcess,
   status: { id: string },
   extra: { as?: string; artifacts?: string[]; transcriptsFrom?: string } = {},
 ) {
-  const name = extra.as ?? status.id;
-  const dir = join(EVIDENCE, 'scans', name);
+  const label = extra.as ?? status.id;
+  const dir = join(EVIDENCE, 'scans', label);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, 'status.json'), JSON.stringify(status, null, 2) + '\n');
   for (const name of extra.artifacts ?? []) {
@@ -74,7 +76,7 @@ async function keep(
       await copyFile(paths.transcript(extra.transcriptsFrom, status.id, Number(attempt)), join(dir, `transcript-${attempt}.log`));
     }
   }
-  (scenarios[expect.getState().currentTestName!] ??= []).push(name);
+  (scenarios[expect.getState().currentTestName!] ??= []).push(label);
 }
 
 /** Runs a server for the enclosing describe, on its own data directory, with `env` over the gate's configuration. */
@@ -152,11 +154,11 @@ const waitForContainer = (scanId: string) =>
       expect((await s.server.request('DELETE', '/api/scan/unknown')).status).toBe(404);
     });
 
-    it('answers 409 for an id already in use, while the Scan runs and after it ends', async () => {
+    it('answers 409 for an id already in use, before and after its Scan ends', async () => {
       expect((await s.server.submit('duplicate', SCRIPTED_SCAN, SOURCE)).status).toBe(201);
       expect((await s.server.submit('duplicate', SCRIPTED_SCAN, SOURCE)).status).toBe(409);
-      const status = await s.server.waitForState('duplicate', ['succeeded', 'failed'], 5 * MINUTE_MS);
-      await keep(s.server, status);
+      const status = await s.server.waitForState('duplicate', ENDED, 5 * MINUTE_MS);
+      await saveEvidence(s.server, status);
       expect((await s.server.submit('duplicate', SCRIPTED_SCAN, SOURCE)).status).toBe(409);
     });
 
@@ -170,17 +172,17 @@ const waitForContainer = (scanId: string) =>
     it('lists the Model Pool with its Default Model, and uses the Default Model when none is requested', async () => {
       const models = (await s.server.request('GET', '/api/models')).body;
       expect(models).toEqual(pool.map((m) => ({ id: m.id, provider: m.provider, default: m.id === defaultModel })));
-      const reply = await s.server.submit('default-model', { profile: 'security', instructions: 'HANG-PROBE' }, SOURCE);
+      const reply = await s.server.submit('default-model', { profile: 'security', instructions: HANG }, SOURCE);
       expect(reply.status).toBe(201);
       expect(reply.body.model).toBe(defaultModel);
-      await keep(s.server, reply.body);
+      await saveEvidence(s.server, reply.body);
       expect((await s.server.request('DELETE', '/api/scan/default-model')).status).toBe(204);
     });
 
     it('honours a non-default pool model', async () => {
       expect((await s.server.submit('non-default-model', { profile: 'security', model: SCRIPTED_ALT.id }, SOURCE)).status).toBe(201);
-      const status = await s.server.waitForState('non-default-model', ['succeeded', 'failed'], 5 * MINUTE_MS);
-      await keep(s.server, status, { artifacts: ['report.md'] });
+      const status = await s.server.waitForState('non-default-model', ENDED, 5 * MINUTE_MS);
+      await saveEvidence(s.server, status, { artifacts: ['report.md'] });
       expect(status).toMatchObject({ state: 'succeeded', model: SCRIPTED_ALT.id });
       // The scripted model names the model opencode asked it for.
       expect((await s.server.request('GET', '/api/scan/non-default-model/artifacts/report.md')).text).toContain(
@@ -195,16 +197,17 @@ const waitForContainer = (scanId: string) =>
     const bomb = { data: Buffer.alloc(64 * MB), deflate: true };
     const traversal = '../../../../escaped.js';
     const absolute = '/tmp/escaped.js';
+    type Case = { what: string; id: string; archive: Buffer; escape?: string };
 
-    it.each([
+    it.each<Case>([
       { what: 'a zip bomb', id: 'zip-bomb', archive: makeZip({ 'src/index.js': 'x\n', 'bomb.bin': bomb }) },
       { what: 'a zip bomb declaring a small size', id: 'lying-zip-bomb', archive: makeZip({ 'bomb.bin': { ...bomb, declaredSize: 1024 } }) },
       { what: 'a path traversal', id: 'path-traversal', archive: makeZip({ 'src/index.js': 'x\n', [traversal]: 'escaped\n' }), escape: traversal },
-      { what: 'an absolute path', id: 'absolute-path', archive: makeZip({ 'src/index.js': 'x\n', [absolute]: 'escaped\n' }), escape: absolute },
+      { what: 'an absolute path', id: 'absolute-path', archive: makeZip({ 'src/index.js': 'x\n', [absolute]: 'escaped\n' }) },
     ])('fails $what as an invalid Source Archive, without running the agent', async ({ id, archive, escape }) => {
       expect((await s.server.submit(id, SCRIPTED_SCAN, archive)).status).toBe(201);
-      const status = await s.server.waitForState(id, ['succeeded', 'failed'], 2 * MINUTE_MS);
-      await keep(s.server, status);
+      const status = await s.server.waitForState(id, ENDED, 2 * MINUTE_MS);
+      await saveEvidence(s.server, status);
       expect(status).toMatchObject({ state: 'failed', attempts: 0, failureReason: expect.stringMatching(/^Invalid Source Archive: /) });
       if (escape) expect(existsSync(resolve(paths.workspace(s.dataDir, id), escape))).toBe(false);
     });
@@ -213,8 +216,8 @@ const waitForContainer = (scanId: string) =>
       expect(s.server.alive()).toBe(true);
       expect((await s.server.request('GET', '/api/profiles')).status).toBe(200);
       expect((await s.server.submit('after-archives', SCRIPTED_SCAN, SOURCE)).status).toBe(201);
-      const status = await s.server.waitForState('after-archives', ['succeeded', 'failed'], 5 * MINUTE_MS);
-      await keep(s.server, status);
+      const status = await s.server.waitForState('after-archives', ENDED, 5 * MINUTE_MS);
+      await saveEvidence(s.server, status);
       expect(status.state).toBe('succeeded');
     });
   });
@@ -234,15 +237,15 @@ const waitForContainer = (scanId: string) =>
     it('stops a running Scan on DELETE: its container goes, its data goes and its id is free again', async () => {
       expect((await submitHanging('delete-running')).status).toBe(201);
       await waitForContainer('delete-running');
-      await keep(s.server, await s.server.status('delete-running'), { as: 'delete-running-before-delete' });
+      await saveEvidence(s.server, await s.server.status('delete-running'), { as: 'delete-running-before-delete' });
       expect((await s.server.request('DELETE', '/api/scan/delete-running')).status).toBe(204);
       expect(containersOf(podman, 'delete-running')).toEqual([]);
       expect((await s.server.request('GET', '/api/scan/delete-running')).status).toBe(404);
       expect(await filesOf(s.dataDir, 'delete-running')).toEqual([]);
 
       expect((await s.server.submit('delete-running', SCRIPTED_SCAN, SOURCE)).status).toBe(201);
-      const status = await s.server.waitForState('delete-running', ['succeeded', 'failed'], 5 * MINUTE_MS);
-      await keep(s.server, status);
+      const status = await s.server.waitForState('delete-running', ENDED, 5 * MINUTE_MS);
+      await saveEvidence(s.server, status);
       expect(status.state).toBe('succeeded');
     });
 
@@ -280,7 +283,7 @@ const waitForContainer = (scanId: string) =>
         1000,
       );
       for (let i = 0; i < 10; i++) await sample();
-      for (const id of rest) await keep(s.server, await s.server.status(id));
+      for (const id of rest) await saveEvidence(s.server, await s.server.status(id));
 
       expect(most).toEqual({ running: 2, containers: 2 });
       for (const id of rest) expect((await s.server.request('DELETE', `/api/scan/${id}`)).status).toBe(204);
@@ -299,12 +302,12 @@ const waitForContainer = (scanId: string) =>
       await s.restart();
 
       for (const id of ['restart-running-1', 'restart-running-2']) {
-        const status = await s.server.waitForState(id, ['failed', 'succeeded'], MINUTE_MS);
-        await keep(s.server, status);
+        const status = await s.server.waitForState(id, ENDED, MINUTE_MS);
+        await saveEvidence(s.server, status);
         expect(status).toMatchObject({ state: 'failed', failureReason: 'Interrupted by a server restart' });
       }
-      const resumed = await s.server.waitForState('restart-queued', ['succeeded', 'failed'], 5 * MINUTE_MS);
-      await keep(s.server, resumed);
+      const resumed = await s.server.waitForState('restart-queued', ENDED, 5 * MINUTE_MS);
+      await saveEvidence(s.server, resumed);
       expect(resumed.state).toBe('succeeded');
       // The new server removes the containers the killed one left behind.
       await waitUntil(
@@ -321,8 +324,8 @@ const waitForContainer = (scanId: string) =>
 
     it('stops each Attempt that runs too long, and fails the Scan when none is left', async () => {
       expect((await s.server.submit('attempt-timeout', HANGING_SCAN, SOURCE)).status).toBe(201);
-      const status = await s.server.waitForState('attempt-timeout', ['succeeded', 'failed'], 3 * MINUTE_MS);
-      await keep(s.server, status);
+      const status = await s.server.waitForState('attempt-timeout', ENDED, 3 * MINUTE_MS);
+      await saveEvidence(s.server, status);
       expect(status).toMatchObject({
         state: 'failed',
         attempts: 2,
@@ -341,11 +344,16 @@ const waitForContainer = (scanId: string) =>
 
     it('stops the Scan when it runs too long, even with Attempts left', async () => {
       expect((await s.server.submit('scan-timeout', HANGING_SCAN, SOURCE)).status).toBe(201);
-      const status = await s.server.waitForState('scan-timeout', ['succeeded', 'failed'], 3 * MINUTE_MS);
-      await keep(s.server, status);
+      const status = await s.server.waitForState('scan-timeout', ENDED, 3 * MINUTE_MS);
+      await saveEvidence(s.server, status);
       expect(status).toMatchObject({ state: 'failed', attempts: 1, failureReason: 'Scan timed out after 0.5 min' });
       expect(containersOf(podman, 'scan-timeout')).toEqual([]);
     });
+  });
+
+  it('has a real model to run the gate with', () => {
+    // Without one the scenarios below are skipped: the gate cannot pass.
+    expect(realModels.map((m) => m.id)).not.toEqual([]);
   });
 
   (realModels.length ? describe : describe.skip)('with the real model', () => {
@@ -363,8 +371,8 @@ const waitForContainer = (scanId: string) =>
         makeZip(fixtureFiles(VULNERABLE_APP)),
       );
       expect(reply.status).toBe(201);
-      const status = await s.server.waitForState('vulnerable-app', ['succeeded', 'failed'], 55 * MINUTE_MS);
-      await keep(s.server, status, { ...evidence, transcriptsFrom: s.dataDir });
+      const status = await s.server.waitForState('vulnerable-app', ENDED, 55 * MINUTE_MS);
+      await saveEvidence(s.server, status, { ...evidence, transcriptsFrom: s.dataDir });
       expect(status).toMatchObject({ state: 'succeeded', model: defaultModel, language: 'it' });
 
       const report = (await s.server.request('GET', '/api/scan/vulnerable-app/artifacts/report.md')).text;
@@ -380,8 +388,8 @@ const waitForContainer = (scanId: string) =>
 
     it('reports no high-severity Finding on a clean codebase', async () => {
       expect((await s.server.submit('clean-app', { profile: 'security' }, makeZip(fixtureFiles(CLEAN_APP)))).status).toBe(201);
-      const status = await s.server.waitForState('clean-app', ['succeeded', 'failed'], 55 * MINUTE_MS);
-      await keep(s.server, status, { ...evidence, transcriptsFrom: s.dataDir });
+      const status = await s.server.waitForState('clean-app', ENDED, 55 * MINUTE_MS);
+      await saveEvidence(s.server, status, { ...evidence, transcriptsFrom: s.dataDir });
       expect(status).toMatchObject({ state: 'succeeded', model: defaultModel, language: 'en' });
 
       const { findings } = (await s.server.request('GET', '/api/scan/clean-app/artifacts/findings.json')).body as { findings: Finding[] };

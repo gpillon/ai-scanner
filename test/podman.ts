@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { ModelEntry, PodmanConfig } from '../src/config';
 import { EGRESS_NETWORK, SCAN_LABEL } from '../src/podman-runner';
 
-const SCRIPTED_MODEL_CONTAINER = 'ai-scanner-smoke-llm';
+const SCRIPTED_MODEL_CONTAINER = 'ai-scanner-scripted-llm';
 
 function pod(podman: PodmanConfig, ...args: string[]) {
   return spawnSync(podman.executable, args, { encoding: 'utf8' });
@@ -38,6 +38,7 @@ export function startScriptedModel(podman: PodmanConfig): void {
   if (run.status !== 0) throw new Error(run.stderr);
 }
 
+/** Removes the container startScriptedModel started. */
 export function stopScriptedModel(podman: PodmanConfig): void {
   pod(podman, 'rm', '--force', '--ignore', SCRIPTED_MODEL_CONTAINER);
 }

@@ -33,6 +33,7 @@ http
       if (JSON.stringify(messages).includes('HANG-PROBE')) return;
       const done = messages.filter((m) => m.role === 'tool').length;
       const tools = (body.tools || []).map((t) => t.function && t.function.name);
+      const step = steps(body.model)[done];
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const chunk = (delta, finish = null) =>
         res.write(
@@ -56,8 +57,8 @@ http
           chunk({ role: 'assistant', content: 'Done.' });
           chunk({}, 'stop');
         }
-      } else if (steps(body.model)[done] && tools.includes('write')) {
-        call('write', steps(body.model)[done]);
+      } else if (step && tools.includes('write')) {
+        call('write', step);
       } else {
         chunk({ role: 'assistant', content: 'Done.' });
         chunk({}, 'stop');

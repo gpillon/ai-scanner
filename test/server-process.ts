@@ -94,15 +94,15 @@ export class ServerProcess {
   async request(method: string, path: string, options: { token?: string | null; form?: FormData } = {}): Promise<Reply> {
     const token = options.token === undefined ? this.token : options.token;
     const headers: Record<string, string> = token === null ? {} : { authorization: `Bearer ${token}` };
-    let payload: Buffer | undefined;
+    let encodedForm: Buffer | undefined;
     if (options.form) {
       const encoded = new Response(options.form);
-      payload = Buffer.from(await encoded.arrayBuffer());
+      encodedForm = Buffer.from(await encoded.arrayBuffer());
       headers['content-type'] = encoded.headers.get('content-type')!;
-      headers['content-length'] = String(payload.length);
+      headers['content-length'] = String(encodedForm.length);
     }
     const res = await new Promise<IncomingMessage>((done, fail) =>
-      httpRequest(this.url + path, { method, headers, agent: false }, done).on('error', fail).end(payload),
+      httpRequest(this.url + path, { method, headers, agent: false }, done).on('error', fail).end(encodedForm),
     );
     const chunks: Buffer[] = [];
     for await (const chunk of res) chunks.push(chunk as Buffer);

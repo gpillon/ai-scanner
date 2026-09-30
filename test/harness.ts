@@ -322,7 +322,7 @@ export async function startApp(options: {
   return harness;
 }
 
-/** Polls until `condition` holds; for supervisor progress the API does not show. */
+/** Polls until `condition` holds, every `intervalMs`: for progress no single request shows. */
 export async function waitUntil(
   condition: () => boolean | Promise<boolean>,
   what = 'condition',
