@@ -5,6 +5,8 @@ export const paths = {
   database: (dataDir: string) => join(dataDir, 'scanner.sqlite'),
   incoming: (dataDir: string) => join(dataDir, 'incoming'),
   artifacts: (dataDir: string) => join(dataDir, 'artifacts'),
+  /** Mounted read-only into the egress proxy: `allow.txt` is its allow list, read at runtime. */
+  egress: (dataDir: string) => join(dataDir, 'egress'),
   scanDir: (dataDir: string, id: string) => join(dataDir, 'scans', id),
   sourceArchive: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'source.zip'),
   workspace: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'workspace'),

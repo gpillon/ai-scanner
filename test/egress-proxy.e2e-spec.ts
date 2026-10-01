@@ -1,12 +1,15 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import { createServer, request, Server } from 'node:http';
 import { AddressInfo, connect } from 'node:net';
-import { resolve } from 'node:path';
+import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 /** Starts the proxy as its container does, in a process of its own; resolves with its port. */
-function startProxy(allow: string[]): Promise<{ child: ChildProcess; port: number }> {
+function startProxy(allow: string[] | { file: string }): Promise<{ child: ChildProcess; port: number }> {
   const script = resolve(__dirname, '..', 'containers', 'egress-proxy', 'proxy.js');
-  const child = spawn(process.execPath, [script], { env: { ...process.env, ALLOW: allow.join(','), PORT: '0' } });
+  const source = Array.isArray(allow) ? { ALLOW: allow.join(',') } : { ALLOW_FILE: allow.file };
+  const child = spawn(process.execPath, [script], { env: { ...process.env, ALLOW: '', ...source, PORT: '0' } });
   return new Promise((done, fail) => {
     child.stdout!.once('data', (line) => done({ child, port: Number(/:(\d+)/.exec(String(line))![1]) }));
     child.once('exit', (code) => fail(new Error(`proxy exited with ${code}`)));
@@ -132,5 +135,44 @@ describe('egress proxy', () => {
       body: 'hello from model',
     });
     expect((await viaProxy(proxyPort, `http://127.0.0.1:${otherPort}/`)).status).toBe(403);
+  });
+
+  describe('with an allow-list file', () => {
+    let dir: string;
+    let fileProxy: ChildProcess;
+    let filePort: number;
+    const allowFile = () => join(dir, 'allow.txt');
+    /** As the server writes it: whole, then renamed into place. */
+    const writeAllow = async (text: string) => {
+      await writeFile(`${allowFile()}.tmp`, text);
+      await rename(`${allowFile()}.tmp`, allowFile());
+    };
+
+    beforeAll(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'ai-scanner-egress-'));
+      ({ child: fileProxy, port: filePort } = await startProxy({ file: allowFile() }));
+    });
+    afterAll(async () => {
+      fileProxy.kill();
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('follows the file as it changes, and allows nothing without it', async () => {
+      // No file yet: nothing is allowed.
+      expect(await tunnel(filePort, `127.0.0.1:${modelPort}`)).toMatch(/^HTTP\/1.1 403/);
+
+      await writeAllow(`127.0.0.1:${otherPort}\n127.0.0.1:${modelPort}\n`);
+      expect(await tunnel(filePort, `127.0.0.1:${modelPort}`)).toContain('hello from model');
+      expect((await viaProxy(filePort, `http://127.0.0.1:${otherPort}/`)).status).toBe(200);
+
+      await writeAllow(`127.0.0.1:${otherPort}`);
+      expect(await tunnel(filePort, `127.0.0.1:${modelPort}`)).toMatch(/^HTTP\/1.1 403/);
+
+      await writeAllow('');
+      expect((await viaProxy(filePort, `http://127.0.0.1:${otherPort}/`)).status).toBe(403);
+
+      await rm(allowFile());
+      expect((await viaProxy(filePort, `http://127.0.0.1:${otherPort}/`)).status).toBe(403);
+    });
   });
 });

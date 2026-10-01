@@ -1,10 +1,11 @@
 import { Logger, OnModuleInit } from '@nestjs/common';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { APP_ROOT } from '../common/app-root';
+import { paths } from '../common/paths';
 import { AppConfig, ModelEntry, PodmanConfig } from '../config/app-config';
 import { AttemptRequest, AttemptResult, Runner } from './runner';
 
@@ -125,6 +126,8 @@ export class PodmanRunner extends Runner implements OnModuleInit {
   private readonly podman: PodmanConfig;
   private readonly models: Map<string, ModelEntry>;
   private readonly egress: string[];
+  /** Host directory holding the proxy's allow list. */
+  private readonly egressDir: string;
   private readonly running = new Map<string, RunningAttempt>();
   private ready?: Promise<void>;
 
@@ -133,6 +136,7 @@ export class PodmanRunner extends Runner implements OnModuleInit {
     this.podman = config.podman;
     this.models = new Map(config.models.map((m) => [m.id, m]));
     this.egress = [...new Set(config.models.map(modelEndpoint))];
+    this.egressDir = paths.egress(config.dataDir);
   }
 
   async run(request: AttemptRequest): Promise<AttemptResult> {
@@ -259,17 +263,28 @@ export class PodmanRunner extends Runner implements OnModuleInit {
     if (!(await this.succeeds(['network', 'exists', EGRESS_NETWORK]))) {
       await this.exec(['network', 'create', EGRESS_NETWORK]);
     }
+    await this.writeEgress(this.egress);
     await this.remove(PROXY_CONTAINER);
     await this.exec([
       'run', '--detach', '--restart', 'always', '--name', PROXY_CONTAINER,
       '--network', `${EGRESS_NETWORK},${AGENT_NETWORK}`,
       '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
       '--volume', `${PROXY_SCRIPT}:/proxy.js:ro`,
-      '--env', `ALLOW=${this.egress.join(',')}`,
+      // The directory, not the file: the allow list is replaced by renaming, which a file mount would not see.
+      '--volume', `${this.egressDir}:/egress:ro`,
+      '--env', 'ALLOW_FILE=/egress/allow.txt',
       '--env', `PORT=${PROXY_PORT}`,
       this.podman.proxyImage, 'node', '/proxy.js',
     ]);
     this.log.log(`Egress proxy allows: ${this.egress.join(', ')}`);
+  }
+
+  /** Replaces the proxy's allow list whole, so it never reads a half-written one. */
+  private async writeEgress(endpoints: string[]): Promise<void> {
+    await mkdir(this.egressDir, { recursive: true });
+    const file = join(this.egressDir, 'allow.txt');
+    await writeFile(`${file}.tmp`, endpoints.map((e) => `${e}\n`).join(''));
+    await rename(`${file}.tmp`, file);
   }
 
   private async remove(container: string): Promise<void> {
