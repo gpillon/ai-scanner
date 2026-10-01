@@ -212,7 +212,7 @@ describe('Kubernetes Runner', () => {
       expect.arrayContaining([
         { name: 'data', mountPath: '/workspace', subPath: 'scans/My_Scan.ID/workspace', readOnly: true },
         { name: 'data', mountPath: '/output', subPath: 'scans/My_Scan.ID/output' },
-        { name: 'data', mountPath: '/skills', subPath: 'scans/My_Scan.ID/skills', readOnly: true },
+        { name: 'data', mountPath: '/skills', subPath: 'scans/My_Scan.ID/agent-skills', readOnly: true },
       ]),
     );
     expect(spec.volumes[0]).toEqual({ name: 'data', persistentVolumeClaim: { claimName: 'scanner-data' } });
@@ -226,12 +226,25 @@ describe('Kubernetes Runner', () => {
     expect(kube.patches[0].body.metadata.ownerReferences[0]).toMatchObject({ kind: 'Pod', name: pod.metadata.name });
 
     // Skills copied onto the volume, the allow list written, the log kept, everything removed.
-    expect(await readFile(join(dataDir, 'scans', 'My_Scan.ID', 'skills', 'security-review', 'SKILL.md'), 'utf8')).toBe('# skill\n');
+    expect(await readFile(join(dataDir, 'scans', 'My_Scan.ID', 'agent-skills', 'security-review', 'SKILL.md'), 'utf8')).toBe('# skill\n');
     expect(await readFile(join(dataDir, 'egress', 'allow.txt'), 'utf8')).toBe('api.anthropic.com:443\n');
     expect(await readFile(req.transcriptPath, 'utf8')).toBe('agent log\n');
     expect(kube.pods.size).toBe(0);
     expect(kube.secrets.size).toBe(0);
     expect(kube.tokens.every((t) => t === 'Bearer sa-token')).toBe(true);
+  });
+
+  it("mounts a Scan's own skills snapshot where it is, on the data volume", async () => {
+    await makeRunner();
+    const snapshot = join(dataDir, 'scans', 'My_Scan.ID', 'skills');
+    await mkdir(join(snapshot, 'pack-skill'), { recursive: true });
+    await runner.run(await request({ skillsDir: snapshot }));
+    expect(kube.created.pods[0].spec.containers[0].volumeMounts).toContainEqual({
+      name: 'data',
+      mountPath: '/skills',
+      subPath: 'scans/My_Scan.ID/skills',
+      readOnly: true,
+    });
   });
 
   it("lets agent pods run on any node when the claim is ReadWriteMany", async () => {

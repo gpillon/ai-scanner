@@ -1,6 +1,6 @@
 import { Logger, OnModuleInit } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { cp, writeFile } from 'node:fs/promises';
+import { cp, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { paths } from '../common/paths';
 import { AppConfig, KubernetesConfig } from '../config/app-config';
@@ -134,7 +134,7 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
     const secrets = `/api/v1/namespaces/${env.namespace}/secrets`;
     try {
       await this.allowList.write(request.egress);
-      const skills = request.skillsDir && (await this.skillsOnVolume(request));
+      const skills = request.skillsDir && (await this.skillsOnVolume(env, request));
       const secretEnv = agentSecrets(request.agentModel, this.k8s.agentEnv, (m) => this.log.warn(m));
       const secretName = Object.keys(secretEnv).length ? `${attempt.pod}-env` : undefined;
       // Leftovers of the same Attempt, should a previous server have died mid-way.
@@ -288,10 +288,17 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
     }
   }
 
-  /** The skills live in the server image: a copy on the data volume, next to the workspace, for the pod to mount. */
-  private async skillsOnVolume(request: AttemptRequest): Promise<string> {
-    const target = join(dirname(request.workspaceDir), 'skills');
-    await cp(request.skillsDir!, target, { recursive: true, force: true });
+  /**
+   * The skills directory as the pod can mount it: as it is when already on the data volume (a
+   * Scan's own snapshot), else a copy there, next to the workspace (a profile's skills, which
+   * live in the server image).
+   */
+  private async skillsOnVolume(env: KubernetesEnvironment, request: AttemptRequest): Promise<string> {
+    const rel = relative(env.dataMount.path, resolve(request.skillsDir!));
+    if (!rel.startsWith('..') && !isAbsolute(rel)) return request.skillsDir!;
+    const target = join(dirname(request.workspaceDir), 'agent-skills');
+    await rm(target, { recursive: true, force: true });
+    await cp(request.skillsDir!, target, { recursive: true });
     return target;
   }
 
