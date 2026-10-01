@@ -7,7 +7,7 @@ Managing the pool decides two things for every Scan: where its source code is se
 - **Admin token.** `SCANNER_ADMIN_TOKEN` opens the admin routes as well as the Scan API. The shared token gets 403 there. Without an admin token, administration is disabled.
 - **Keys at rest.** API keys are sealed with AES-256-GCM under `SCANNER_SECRET_KEY`, bound to their Provider row, and never returned by the API. The database sits on the same volume as uploaded code, so keys must not be stored in clear. A key that cannot be decrypted (the secret changed) fails the Scans that need it, not the server.
 - **Egress follows the pool.** The model and its endpoint are resolved for every Attempt, so pool changes apply from the next one. This first used one shared proxy that reread an allow-list file. Each Attempt now has a proxy of its own, allowing its model's endpoint only (ADR-0003).
-- **Running Scans are kept safe.** A disabled model is no longer offered, but Scans already using it still run. The allow list covers every model, disabled ones included. A model with queued or running Scans cannot be removed.
+- **Running Scans are kept safe.** A disabled model is no longer offered, but Scans already using it still run, their proxy allowing its endpoint. A model with queued or running Scans cannot be removed.
 - **Seeding.** `SCANNER_MODELS` seeds the pool on the very first start only, recorded in the database. Models an admin removed do not come back at the next restart, and later edits to the variable are ignored.
 
 ## Considered Options

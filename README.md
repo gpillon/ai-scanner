@@ -139,7 +139,7 @@ Environment variables, read at startup. `.env.example` has a starting point.
 
 ## Isolation
 
-Each Attempt runs opencode in its own ephemeral Podman container ([ADR-0003](docs/adr/0003-isolated-container-per-scan.md)), or its own pod on Kubernetes ([ADR-0007](docs/adr/0007-kubernetes-runner.md)). The container has a read-only root filesystem and no capabilities. The code is mounted read-only, the agent has no shell, and the only network route out is an egress proxy that lets through the Model Pool's endpoints and nothing else. Source Archives are extracted with size and file-count limits and with path-traversal rejection.
+Each Attempt runs opencode in its own ephemeral Podman container ([ADR-0003](docs/adr/0003-isolated-container-per-scan.md)), or its own pod on Kubernetes ([ADR-0007](docs/adr/0007-kubernetes-runner.md)). The container has a read-only root filesystem and no capabilities. The code is mounted read-only and the agent has no shell. Its only network route out is an egress proxy of its own, started and removed with the Attempt, which lets through its Scan's model endpoint and nothing else. With Podman the agent and its proxy share an internal network no other Attempt can reach; on Kubernetes the proxy is a separate pod, and per-Attempt NetworkPolicies let the agent reach that proxy only. Source Archives are extracted with size and file-count limits and with path-traversal rejection.
 
 ## Container images
 
