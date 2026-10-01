@@ -105,6 +105,66 @@ async function request(path: string, init: RequestInit = {}, bearer = token.get(
   return res;
 }
 
+/** `admin` for the admin token, which also opens the administration pages (ADR-0006). */
+export type Role = 'admin' | 'caller';
+
+export interface ProviderKind {
+  kind: string;
+  defaultBaseUrl?: string;
+  apiKeyEnv?: string;
+}
+
+export interface Provider {
+  id: string;
+  kind: string;
+  baseUrl: string | null;
+  effectiveBaseUrl: string | null;
+  apiKeySet: boolean;
+  apiKeyHint: string | null;
+  apiKeyEnv: string | null;
+  models: number;
+  createdAt: string;
+}
+
+export interface NewProvider {
+  id: string;
+  kind: string;
+  baseUrl?: string;
+  apiKey?: string;
+}
+
+export interface ProviderChange {
+  baseUrl?: string | null;
+  /** A new key; `null` removes the stored one. */
+  apiKey?: string | null;
+}
+
+export interface DiscoveredModel {
+  name: string;
+  displayName?: string;
+  /** The Model Pool id, when the pool already has it. */
+  inPool?: string;
+}
+
+export interface AdminModel {
+  id: string;
+  provider: string;
+  name: string;
+  enabled: boolean;
+  default: boolean;
+}
+
+export interface NewModel {
+  provider: string;
+  name: string;
+  id?: string;
+  default?: boolean;
+}
+
+/** A JSON request body. */
+const send = (method: string, path: string, body: unknown) =>
+  request(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
 export const api = {
   /** Checks a token before keeping it: any authenticated endpoint will do. */
   async verifyToken(candidate: string): Promise<boolean> {
@@ -135,6 +195,35 @@ export const api = {
 
   async deleteScan(id: string): Promise<void> {
     await request(`/api/scan/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  me: async (): Promise<{ role: Role }> => (await request('/api/me')).json(),
+
+  providerKinds: async (): Promise<ProviderKind[]> => (await request('/api/admin/provider-kinds')).json(),
+
+  providers: async (): Promise<Provider[]> => (await request('/api/admin/providers')).json(),
+
+  createProvider: async (input: NewProvider): Promise<Provider> => (await send('POST', '/api/admin/providers', input)).json(),
+
+  updateProvider: async (id: string, change: ProviderChange): Promise<Provider> =>
+    (await send('PATCH', `/api/admin/providers/${encodeURIComponent(id)}`, change)).json(),
+
+  async deleteProvider(id: string): Promise<void> {
+    await request(`/api/admin/providers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  discoverModels: async (providerId: string): Promise<DiscoveredModel[]> =>
+    (await request(`/api/admin/providers/${encodeURIComponent(providerId)}/models`)).json(),
+
+  adminModels: async (): Promise<AdminModel[]> => (await request('/api/admin/models')).json(),
+
+  createModel: async (input: NewModel): Promise<AdminModel> => (await send('POST', '/api/admin/models', input)).json(),
+
+  updateModel: async (id: string, change: { enabled?: boolean; default?: boolean }): Promise<AdminModel> =>
+    (await send('PATCH', `/api/admin/models/${encodeURIComponent(id)}`, change)).json(),
+
+  async deleteModel(id: string): Promise<void> {
+    await request(`/api/admin/models/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
   /** Artifacts need the bearer header, so they are fetched as a Blob rather than linked. */

@@ -5,7 +5,13 @@ import { useEffect, useState } from 'react';
 export const SCAN_TABS = ['overview', 'findings', 'logs'] as const;
 export type ScanTab = (typeof SCAN_TABS)[number];
 
-export type Route = { page: 'scans' } | { page: 'new' } | { page: 'scan'; id: string; tab: ScanTab } | { page: 'docs' };
+export type Route =
+  | { page: 'scans' }
+  | { page: 'new' }
+  | { page: 'scan'; id: string; tab: ScanTab }
+  | { page: 'docs' }
+  | { page: 'providers' }
+  | { page: 'models' };
 
 export function parse(hash: string): Route {
   const path = hash.replace(/^#\/?/, '');
@@ -16,6 +22,8 @@ export function parse(hash: string): Route {
   }
   if (path === 'new') return { page: 'new' };
   if (path === 'docs') return { page: 'docs' };
+  if (path === 'admin/providers') return { page: 'providers' };
+  if (path === 'admin/models') return { page: 'models' };
   return { page: 'scans' };
 }
 
@@ -30,6 +38,10 @@ export function href(route: Route): string {
       return '#/new';
     case 'docs':
       return '#/docs';
+    case 'providers':
+      return '#/admin/providers';
+    case 'models':
+      return '#/admin/models';
     case 'scan':
       return `#/scans/${encodeURIComponent(route.id)}${route.tab === 'overview' ? '' : `/${route.tab}`}`;
   }

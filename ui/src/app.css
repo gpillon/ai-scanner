@@ -176,3 +176,23 @@
   font-weight: var(--pf-t--global--font--weight--body--bold);
   margin-bottom: var(--pf-t--global--spacer--sm);
 }
+
+/* Administration. */
+.app-modal-scroll {
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.app-subtle {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: var(--pf-t--global--font--size--sm);
+}
+
+.app-row-disabled td:not(:last-child) {
+  opacity: 0.55;
+}
+
+.app-default-star {
+  color: var(--pf-t--global--color--brand--default);
+  vertical-align: -0.125em;
+}

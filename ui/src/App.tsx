@@ -7,6 +7,7 @@ import {
   MastheadMain,
   MastheadToggle,
   Nav,
+  NavGroup,
   NavItem,
   NavList,
   Page,
@@ -23,9 +24,11 @@ import BarsIcon from '@patternfly/react-icons/dist/esm/icons/bars-icon';
 import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-icon';
 import ShieldAltIcon from '@patternfly/react-icons/dist/esm/icons/shield-alt-icon';
 import { useEffect, useState } from 'react';
-import { setUnauthorizedHandler, token } from './api';
+import { api, setUnauthorizedHandler, token, type Role } from './api';
 import { DocsPage } from './pages/DocsPage';
 import { LoginPage } from './pages/LoginPage';
+import { ModelsPage } from './pages/ModelsPage';
+import { ProvidersPage } from './pages/ProvidersPage';
 import { NewScanPage } from './pages/NewScanPage';
 import { ScanDetailPage } from './pages/ScanDetailPage';
 import { ScansPage } from './pages/ScansPage';
@@ -33,7 +36,16 @@ import { href, useRoute } from './router';
 
 export function App() {
   const [signedIn, setSignedIn] = useState(() => Boolean(token.get()));
+  const [role, setRole] = useState<Role>();
   const route = useRoute();
+
+  useEffect(() => {
+    if (!signedIn) return setRole(undefined);
+    api
+      .me()
+      .then((me) => setRole(me.role))
+      .catch(() => setRole('caller'));
+  }, [signedIn]);
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
@@ -105,6 +117,16 @@ export function App() {
               Documentation
             </NavItem>
           </NavList>
+          {role === 'admin' && (
+            <NavGroup title="Administration">
+              <NavItem to={href({ page: 'models' })} isActive={route.page === 'models'}>
+                Models
+              </NavItem>
+              <NavItem to={href({ page: 'providers' })} isActive={route.page === 'providers'}>
+                Providers
+              </NavItem>
+            </NavGroup>
+          )}
         </Nav>
       </PageSidebarBody>
     </PageSidebar>
@@ -116,6 +138,8 @@ export function App() {
       {route.page === 'scans' && <ScansPage />}
       {route.page === 'scan' && <ScanDetailPage key={route.id} id={route.id} tab={route.tab} />}
       {route.page === 'docs' && <DocsPage />}
+      {route.page === 'models' && <ModelsPage />}
+      {route.page === 'providers' && <ProvidersPage />}
     </Page>
   );
 }
