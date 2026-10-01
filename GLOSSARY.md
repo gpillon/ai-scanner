@@ -39,8 +39,12 @@ _Avoid_: Issue, vulnerability, defect
 ### Models
 
 **Model Pool**:
-The set of LLM models the server is configured to allow for Scans.
-_Avoid_: Model list, providers
+The set of LLM models an admin allows for Scans, each served by a Provider (ADR-0006).
+_Avoid_: Model list
+
+**Provider**:
+An LLM API that serves Model Pool models, with how to reach it and its API key; its kind (`anthropic`, `openai-compatible`, ...) says how to talk to it.
+_Avoid_: Backend, endpoint, vendor
 
 **Default Model**:
 The Model Pool entry a Scan uses when the caller does not ask for a specific one.

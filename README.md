@@ -69,8 +69,20 @@ The UI lives in [`ui/`](ui): Vite, React, TypeScript and [PatternFly](https://ww
 - **New Scan**: upload a zip and pick a profile, model, language and instructions. The Scan id is a random UUID.
 - **Scan**: details, failure reason, Artifact downloads, a Findings table, and delete. An **Activity** log shows what the agent does as it does it, and still shows it after the Scan has finished.
 - **Documentation**: the backend's Swagger UI, already signed in with your token.
+- **Administration** (admin token only): **Providers** and **Models**, see below.
 
 In production the backend serves the built UI as static files under `/ui/`, and `/` redirects there. The UI is public: it holds no data, and it asks for the token to call the API. If `ui/dist` is missing, for instance when only the backend was built, the backend serves the API alone. `SCANNER_UI_DIR` points it at another build.
+
+## Model Pool administration
+
+Scans run on the models of the Model Pool, served by Providers ([ADR-0006](docs/adr/0006-model-pool-in-the-database-managed-by-an-admin.md)). Both live in the database. Sign in with `SCANNER_ADMIN_TOKEN` and the menu gains an Administration group:
+
+- **Providers**: add an LLM API. Its kind is `anthropic`, `openai`, `google`, `mistral`, `groq`, `xai`, `openrouter`, or `openai-compatible` for vLLM, LM Studio, Ollama and any other OpenAI-style API, which needs a base URL. An API key typed here is stored encrypted under `SCANNER_SECRET_KEY` and never shown again. Without one, the kind's usual variable (e.g. `ANTHROPIC_API_KEY`) is read from the server's environment.
+- **Models**: pick a Provider, and the server asks its API which models it offers. Add the ones Scans may use, enable or disable them, and choose the Default Model.
+
+Agents may reach every Provider that serves a model, and nothing else. The egress proxy picks changes up without a restart. A disabled model still serves the Scans already using it. `SCANNER_MODELS` only fills an empty database on its first start: after that, edits to it are ignored.
+
+The same operations are under `/api/admin` in the API reference.
 
 ## Configuration
 
@@ -79,8 +91,10 @@ Environment variables, read at startup. `.env.example` has a starting point.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SCANNER_TOKEN` | required | Shared bearer token |
-| `SCANNER_MODELS` | required | Model Pool, JSON: `[{"id","provider","baseUrl?","apiKeyEnv?"}]` |
-| `SCANNER_DEFAULT_MODEL` | first model | Default Model |
+| `SCANNER_ADMIN_TOKEN` | — | Admin token: opens the admin pages and routes. Without it, administration is disabled |
+| `SCANNER_SECRET_KEY` | — | Encrypts stored Provider API keys (16+ characters). Without it, keys cannot be stored |
+| `SCANNER_MODELS` | — | Seeds the Model Pool on the first start only, JSON: `[{"id","provider","baseUrl?","apiKeyEnv?"}]` |
+| `SCANNER_DEFAULT_MODEL` | first model | Default Model of that seed |
 | `SCANNER_RUNNER` | `podman` | `podman` runs the agent; `fake` writes a placeholder Report |
 | `SCANNER_AGENT_IMAGE` | `localhost/ai-scanner-agent:latest` | Image run for each Attempt |
 | `SCANNER_EGRESS_PROXY_IMAGE` | `docker.io/library/node:22-alpine` | Image running the egress proxy |
@@ -139,12 +153,13 @@ Tags: branch name, `sha-<short>`, `latest` on the default branch, and `X.Y.Z` / 
 src/          NestJS backend, one folder per feature module
   main.ts, app.module.ts, app.setup.ts   bootstrap, root module, pipes/OpenAPI/UI
   core/       global module: configuration and Clock
+  auth/       bearer guard, admin token, GET /api/me
   config/     environment variables to AppConfig
-  common/     bearer guard, Clock, on-disk paths, app root
+  common/     Clock, on-disk paths, app root
   scans/      Scans: controller, service, supervisor, retention, upload, DTOs, entity
   runner/     Runner port, Podman and fake adapters
   profiles/   Scan Profiles and GET /api/profiles
-  models/     Model Pool and GET /api/models
+  models/     Model Pool and Providers (database), discovery, GET /api/models, /api/admin
   artifacts/  Artifact store
   reports/    findings.json checks, Report Template, PDF rendering
 ui/           Web UI (Vite + React + PatternFly)
