@@ -13,7 +13,8 @@
  * The real Scan reviews test/fixtures/vulnerable-app, whose planted vulnerabilities it must find.
  */
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AppConfig, loadConfig, ModelEntry, MINUTE_MS } from '../src/config/app-config';
 import { paths } from '../src/common/paths';
@@ -93,15 +94,18 @@ const connect = (authority) => new Promise((done) => {
   describe('isolation', () => {
     const model: ModelEntry = { id: 'claude-sonnet-4-5', provider: 'anthropic' };
     const overrides = smokeConfig({ models: [model], defaultModel: model.id, maxAttempts: 1 });
-    /** The Runner only reads the Podman settings and the Model Pool from it. */
-    const runnerConfig = testConfig('', overrides);
+    /** The app with a ProbeRunner; they share the data directory, where the Runner keeps the egress allow list. */
+    async function startProbe(script: string): Promise<Harness> {
+      const dataDir = await mkdtemp(join(tmpdir(), 'ai-scanner-'));
+      return startApp({ dataDir, runner: new ProbeRunner(testConfig(dataDir, overrides), script), config: overrides });
+    }
 
     let h: Harness;
     afterEach(() => h?.dispose());
 
     it('reads the workspace and writes only to /output, without capabilities or direct egress', async () => {
       const script = ISOLATION_PROBE.replace("process.argv[1] || ''", JSON.stringify(modelEndpoint(model)));
-      h = await startApp({ runner: new ProbeRunner(runnerConfig, script), config: overrides });
+      h = await startProbe(script);
       // The probe writes no Report, so the Scan fails after its one Attempt.
       await h.submit('iso', { profile: 'security' }, makeZip({ 'src/index.js': 'console.log("hi")\n' }));
       await h.waitForState('iso', 'failed', 5 * MINUTE_MS);
@@ -125,7 +129,7 @@ const connect = (authority) => new Promise((done) => {
         "const run = (...args) => { const r = require('child_process').spawnSync('opencode', args, { encoding: 'utf8' }); return r.stdout + r.stderr; };" +
         "require('fs').writeFileSync('/output/config.json', run('debug', 'config'));" +
         "require('fs').writeFileSync('/output/skills.txt', run('debug', 'skill'));";
-      h = await startApp({ runner: new ProbeRunner(runnerConfig, script), config: overrides });
+      h = await startProbe(script);
       // A hostile repository tries to turn the shell back on and to bring its own skills.
       const hostile = makeZip({
         'opencode.json': JSON.stringify({ permission: { bash: 'allow', webfetch: 'allow' } }),
@@ -157,7 +161,7 @@ const connect = (authority) => new Promise((done) => {
     });
 
     it('removes the container of an Attempt stopped at the Attempt timeout', async () => {
-      h = await startApp({ runner: new ProbeRunner(runnerConfig, 'setTimeout(() => {}, 10 * 60 * 1000)'), config: overrides });
+      h = await startProbe('setTimeout(() => {}, 10 * 60 * 1000)');
       await h.submit('slow');
       await waitUntil(() => containersOf('slow').length === 1, 'the agent container', MINUTE_MS);
       h.clock.advance(overrides.attemptTimeoutMs!);
@@ -166,7 +170,7 @@ const connect = (authority) => new Promise((done) => {
     });
 
     it('removes the container of an Attempt stopped by DELETE', async () => {
-      h = await startApp({ runner: new ProbeRunner(runnerConfig, 'setTimeout(() => {}, 10 * 60 * 1000)'), config: overrides });
+      h = await startProbe('setTimeout(() => {}, 10 * 60 * 1000)');
       await h.submit('del');
       await waitUntil(() => containersOf('del').length === 1, 'the agent container', MINUTE_MS);
       expect((await h.api.delete('/api/scan/del')).status).toBe(204);
