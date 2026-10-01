@@ -56,7 +56,7 @@ describe('Model Pool administration', () => {
 
     it('happens once: what the admin removed does not come back after a restart', async () => {
       h = await startApp();
-      for (const id of ['fast-model', 'deep-model']) expect((await h.admin.delete(`/api/admin/models/${id}`)).status).toBe(204);
+      for (const id of ['deep-model', 'fast-model']) expect((await h.admin.delete(`/api/admin/models/${id}`)).status).toBe(204);
       await h.close();
       h = await startApp({ dataDir: h.dataDir });
       expect((await h.api.get('/api/models')).body).toEqual([]);
@@ -166,16 +166,26 @@ describe('Model Pool administration', () => {
       expect((await h.admin.get('/api/admin/models')).body).toHaveLength(2);
     });
 
+    it('keep a Default Model: it cannot be disabled or removed while others remain', async () => {
+      h = await startApp();
+      expect((await h.admin.patch('/api/admin/models/fast-model').send({ enabled: false })).status).toBe(409);
+      expect((await h.admin.patch('/api/admin/models/fast-model').send({ default: false })).status).toBe(409);
+      expect((await h.admin.delete('/api/admin/models/fast-model')).status).toBe(409);
+      await h.admin.patch('/api/admin/models/deep-model').send({ default: true });
+      expect((await h.admin.patch('/api/admin/models/fast-model').send({ enabled: false })).status).toBe(200);
+      expect((await h.submit('s1')).body.model).toBe('deep-model');
+    });
+
     it('cannot be removed while a Scan that uses it is running', async () => {
       h = await startApp();
       const gate = new Gate();
       h.runner.script = gate.script();
-      await h.submit('busy');
+      await h.submit('busy', { profile: 'security', model: 'deep-model' });
       await h.waitForState('busy', 'running');
-      expect((await h.admin.delete('/api/admin/models/fast-model')).status).toBe(409);
+      expect((await h.admin.delete('/api/admin/models/deep-model')).status).toBe(409);
       gate.release('busy');
       await h.waitForState('busy', 'succeeded');
-      expect((await h.admin.delete('/api/admin/models/fast-model')).status).toBe(204);
+      expect((await h.admin.delete('/api/admin/models/deep-model')).status).toBe(204);
     });
 
     it('reach the agent with their Provider, key and the allow list', async () => {
@@ -192,6 +202,15 @@ describe('Model Pool administration', () => {
       } finally {
         await api.close();
       }
+    });
+
+    it("fall back to the kind's usual key variable when no key is stored", async () => {
+      h = await startApp();
+      await h.admin.post('/api/admin/providers').send({ id: 'work', kind: 'anthropic' });
+      await h.admin.post('/api/admin/models').send({ provider: 'work', name: 'claude-x' });
+      await h.submit('s1', { profile: 'security', model: 'claude-x' });
+      await h.waitForState('s1', 'succeeded');
+      expect(h.runner.calls[0].agentModel).toEqual({ provider: 'anthropic', builtIn: true, name: 'claude-x', apiKeyEnv: 'ANTHROPIC_API_KEY' });
     });
 
     it('fail the Scan clearly when the stored key cannot be decrypted', async () => {

@@ -8,7 +8,7 @@ import { Scan } from '../scans/entities/scan.entity';
 import { PoolModel } from './entities/pool-model.entity';
 import { PoolSeed } from './entities/pool-seed.entity';
 import { Provider } from './entities/provider.entity';
-import { endpointOf, isBuiltInKind } from './provider-kinds';
+import { endpointOf, isBuiltInKind, KIND_INFO } from './provider-kinds';
 import { ProvidersService } from './providers.service';
 
 export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$/;
@@ -141,7 +141,11 @@ export class ModelPool implements OnModuleInit {
   }
 
   async update(id: string, change: ModelChange): Promise<PoolModel> {
-    await this.get(id);
+    const model = await this.get(id);
+    // Callers that name no model would be left with none.
+    if (model.isDefault && (change.enabled === false || change.default === false)) {
+      throw new ConflictException(`${id} is the Default Model: make another model the default first`);
+    }
     await this.db.transaction(async (tx) => {
       if (change.enabled !== undefined) await tx.update(PoolModel, { id }, { enabled: change.enabled });
       if (change.default === true) {
@@ -156,7 +160,11 @@ export class ModelPool implements OnModuleInit {
 
   /** Refused while a queued or running Scan uses the model: its next Attempt would have none. */
   async remove(id: string): Promise<void> {
-    await this.get(id);
+    const model = await this.get(id);
+    // Removing the last model is fine: then there is nothing left to be the default.
+    if (model.isDefault && (await this.models.count()) > 1) {
+      throw new ConflictException(`${id} is the Default Model: make another model the default first`);
+    }
     const active = await this.scans.countBy({ model: id, state: In(['queued', 'running']) });
     if (active) throw new ConflictException(`Model ${id} is used by ${active} queued or running Scan(s): disable it instead`);
     await this.models.delete(id);
@@ -169,12 +177,14 @@ export class ModelPool implements OnModuleInit {
     const provider = await this.providers.get(model.providerId);
     const builtIn = isBuiltInKind(provider.kind);
     const apiKey = this.providers.storedKey(provider);
+    // Without a stored key, the same variable discovery reads: the row's, else the kind's usual one.
+    const apiKeyEnv = provider.apiKeyEnv ?? KIND_INFO[provider.kind].apiKeyEnv;
     return {
       provider: builtIn ? provider.kind : provider.id,
       builtIn,
       name: model.name,
       ...(provider.baseUrl && { baseUrl: provider.baseUrl }),
-      ...(apiKey ? { apiKey } : provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
+      ...(apiKey ? { apiKey } : apiKeyEnv ? { apiKeyEnv } : {}),
     };
   }
 

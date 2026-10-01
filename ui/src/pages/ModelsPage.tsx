@@ -128,6 +128,7 @@ export function ModelsPage() {
                       id={`enabled-${m.id}`}
                       aria-label={`${m.id} enabled`}
                       isChecked={m.enabled}
+                      isDisabled={m.default}
                       onChange={(_e, enabled) => change(() => api.updateModel(m.id, { enabled }))}
                     />
                   </Td>
@@ -136,7 +137,12 @@ export function ModelsPage() {
                       items={[
                         { title: 'Make it the Default Model', isDisabled: m.default, onClick: () => change(() => api.updateModel(m.id, { default: true })) },
                         { isSeparator: true },
-                        { title: 'Remove from the pool', onClick: () => change(() => api.deleteModel(m.id)) },
+                        {
+                          title: 'Remove from the pool',
+                          // The Default Model stays until another one takes its place.
+                          isDisabled: m.default && models.length > 1,
+                          onClick: () => change(() => api.deleteModel(m.id)),
+                        },
                       ]}
                     />
                   </Td>
