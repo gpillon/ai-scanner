@@ -20,6 +20,20 @@ export class GitSources {
     });
   }
 
+  /** The URL as it would be stored, once checked like a fetch checks it; a 400 otherwise. */
+  async checkUrl(repoUrl: string, withCredentials: boolean): Promise<string> {
+    return this.translate(async () => (await checkRepoUrl(repoUrl, this.config.git, withCredentials)).href);
+  }
+
+  /** A branch or tag name checked like a fetch checks it; a 400 otherwise. */
+  checkRefName(ref: string | null): string | null {
+    try {
+      return ref === null ? null : checkRef(ref);
+    } catch (e) {
+      throw e instanceof GitSourceError ? new BadRequestException(e.message) : e;
+    }
+  }
+
   /** Checks out `ref`, or the default branch, into `target`; returns the URL as stored and the commit. */
   async fetch(repoUrl: string, ref: string | undefined, credentials: GitCredentials, target: string): Promise<{ url: string; commit: string }> {
     return this.translate(async () => {

@@ -242,6 +242,13 @@ export function ScanDetailPage({ id, tab }: { id: string; tab: ScanTab }) {
                                     <div className="app-subtle">
                                       {scan.source.ref ?? 'default branch'} · commit <code>{scan.source.commit.slice(0, 12)}</code>
                                     </div>
+                                    {(scan.source.repository || scan.source.schedule) && (
+                                      <div className="app-subtle">
+                                        {scan.source.repository && <>Saved repository <a href={href({ page: 'repositories' })}>{scan.source.repository}</a></>}
+                                        {scan.source.repository && scan.source.schedule && ' · '}
+                                        {scan.source.schedule && <>Schedule <a href={href({ page: 'schedules' })}>{scan.source.schedule}</a></>}
+                                      </div>
+                                    )}
                                   </>
                                 ) : (
                                   'Zip archive'

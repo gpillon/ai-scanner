@@ -14,7 +14,7 @@ import {
   TextInput,
 } from '@patternfly/react-core';
 import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { api, type GitRefs } from '../api';
 
 export interface GitSourceValue {
@@ -31,7 +31,25 @@ export const emptyGitSource: GitSourceValue = { url: '', ref: '', username: '', 
  * A Git repository as a Scan's source (ADR-0010): its URL, credentials when private, and the
  * branch or tag, chosen from what the repository lists. Credentials stay in the form's memory.
  */
-export function GitSourceFields({ value, onChange, isDisabled }: { value: GitSourceValue; onChange: (v: GitSourceValue) => void; isDisabled?: boolean }) {
+export function GitSourceFields({
+  value,
+  onChange,
+  isDisabled,
+  tokenHelp = 'A read-only access token is enough. Used for this fetch only: the server never stores it.',
+  refLabel = 'Branch or tag',
+  loadRefs,
+  noCredentials,
+}: {
+  value: GitSourceValue;
+  onChange: (v: GitSourceValue) => void;
+  isDisabled?: boolean;
+  tokenHelp?: ReactNode;
+  refLabel?: string;
+  /** Lists the refs some other way, e.g. with a Saved Repository's stored credentials. */
+  loadRefs?: () => Promise<GitRefs>;
+  /** Hides the credential fields, e.g. where only an admin may store them. */
+  noCredentials?: boolean;
+}) {
   const [refs, setRefs] = useState<GitRefs>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -43,7 +61,9 @@ export function GitSourceFields({ value, onChange, isDisabled }: { value: GitSou
     setLoading(true);
     setError(undefined);
     try {
-      const found = await api.gitRefs(value.url.trim(), { username: value.username || undefined, token: value.token || undefined });
+      const found = loadRefs
+        ? await loadRefs()
+        : await api.gitRefs(value.url.trim(), { username: value.username || undefined, token: value.token || undefined });
       setRefs(found);
       // A ref chosen before that the repository does not have is dropped.
       if (value.ref && !found.branches.includes(value.ref) && !found.tags.includes(value.ref)) set({ ref: '' });
@@ -77,6 +97,7 @@ export function GitSourceFields({ value, onChange, isDisabled }: { value: GitSou
         </FormHelperText>
       </FormGroup>
 
+      {!noCredentials && (
       <ExpandableSection
         toggleText={privateOpen || value.token ? 'Private repository' : 'Private repository? Add credentials'}
         isExpanded={privateOpen || Boolean(value.token)}
@@ -90,13 +111,14 @@ export function GitSourceFields({ value, onChange, isDisabled }: { value: GitSou
           <TextInput id="repo-token" type="password" value={value.token} onChange={(_e, token) => set({ token })} autoComplete="new-password" isDisabled={isDisabled} />
           <FormHelperText>
             <HelperText>
-              <HelperTextItem>A read-only access token is enough. Used for this fetch only: the server never stores it.</HelperTextItem>
+              <HelperTextItem>{tokenHelp}</HelperTextItem>
             </HelperText>
           </FormHelperText>
         </FormGroup>
       </ExpandableSection>
+      )}
 
-      <FormGroup label="Branch or tag" fieldId="repo-ref">
+      <FormGroup label={refLabel} fieldId="repo-ref">
         <InputGroup>
           <InputGroupItem isFill>
             {refs ? (

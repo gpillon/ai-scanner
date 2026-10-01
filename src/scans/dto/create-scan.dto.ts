@@ -44,7 +44,15 @@ export class CreateScanDto {
   @IsString()
   repoUrl?: string;
 
-  @ApiPropertyOptional({ description: 'With repoUrl: the branch or tag. Defaults to the default branch. See POST /api/git/refs.' })
+  @ApiPropertyOptional({
+    description: 'Instead of `file` or repoUrl: a Saved Repository (ADR-0014), fetched with its stored credentials; one with a stored token needs the admin token. See GET /api/repositories.',
+  })
+  @emptyToUndefined()
+  @IsOptional()
+  @IsString()
+  repository?: string;
+
+  @ApiPropertyOptional({ description: "With repoUrl or repository: the branch or tag. Defaults to the Saved Repository's ref, else the default branch. See POST /api/git/refs." })
   @emptyToUndefined()
   @IsOptional()
   @IsString()

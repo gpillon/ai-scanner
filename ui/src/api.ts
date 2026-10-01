@@ -19,7 +19,16 @@ export interface ScanStatus {
   /** The Skill Packs the Scan added to its profile, with the skills each gave it. */
   skillPacks?: { id: string; skills: { name: string; hash: string }[] }[];
   /** When the code came from a Git repository (ADR-0010). */
-  source?: { type: 'git'; url: string; ref: string | null; commit: string };
+  source?: {
+    type: 'git';
+    url: string;
+    ref: string | null;
+    commit: string;
+    /** The Saved Repository it was fetched as (ADR-0014). */
+    repository?: string;
+    /** The Scan Schedule that started it (ADR-0014). */
+    schedule?: string;
+  };
   artifacts?: string[];
   /** Tokens the agent used over the Attempts so far, subagents included; absent until one reports it. */
   usage?: TokenUsage;
@@ -77,6 +86,8 @@ export interface NewScan {
   /** A Source Archive, or else `repo`. */
   file?: File;
   repo?: { url: string; ref?: string; credentials?: GitCredentials };
+  /** Or a Saved Repository, fetched with its stored credentials; `ref` over its own. */
+  savedRepository?: { id: string; ref?: string };
   profile: string;
   model?: string;
   language?: string;
@@ -237,6 +248,86 @@ export interface SkillPack {
   skills: { name: string; description: string }[];
 }
 
+/** A Source Repository kept on the server under a name (ADR-0014); its token is never sent back. */
+export interface SavedRepository {
+  id: string;
+  description: string;
+  url: string;
+  /** null: the default branch. */
+  ref: string | null;
+  username: string | null;
+  tokenSet: boolean;
+  tokenHint: string | null;
+  createdAt: string;
+}
+
+export interface NewRepository {
+  id: string;
+  description?: string;
+  url: string;
+  ref?: string;
+  username?: string;
+  token?: string;
+}
+
+export interface RepositoryChange {
+  description?: string;
+  url?: string;
+  ref?: string | null;
+  username?: string | null;
+  /** A new token; `null` removes the stored one. */
+  token?: string | null;
+}
+
+export const CADENCES = ['interval', 'daily', 'weekly'] as const;
+export type Cadence = (typeof CADENCES)[number];
+
+/** Scans of a Saved Repository the server starts by itself (ADR-0014). */
+export interface Schedule {
+  id: string;
+  description: string;
+  repository: string;
+  ref: string | null;
+  profile: string;
+  model: string | null;
+  language: string | null;
+  instructions: string | null;
+  skillPacks: string[];
+  attemptTimeoutMinutes: number | null;
+  cadence: Cadence;
+  intervalHours: number | null;
+  /** `HH:MM` in timeZone. */
+  time: string | null;
+  /** 0 (Sunday) to 6. */
+  weekdays: number[] | null;
+  timeZone: string;
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastScanId: string | null;
+  lastError: string | null;
+  createdAt: string;
+}
+
+export interface NewSchedule {
+  id: string;
+  description?: string;
+  repository: string;
+  ref?: string | null;
+  profile: string;
+  model?: string | null;
+  language?: string | null;
+  instructions?: string | null;
+  skillPacks?: string[] | null;
+  attemptTimeoutMinutes?: number | null;
+  cadence: Cadence;
+  intervalHours?: number;
+  time?: string;
+  weekdays?: number[];
+  timeZone?: string;
+  enabled?: boolean;
+}
+
 /** A JSON request body. */
 const send = (method: string, path: string, body: unknown) =>
   request(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -272,6 +363,10 @@ export const api = {
       if (scan.repo.ref) form.append('ref', scan.repo.ref);
       if (scan.repo.credentials?.username) form.append('gitUsername', scan.repo.credentials.username);
       if (scan.repo.credentials?.token) form.append('gitToken', scan.repo.credentials.token);
+    }
+    if (scan.savedRepository) {
+      form.append('repository', scan.savedRepository.id);
+      if (scan.savedRepository.ref) form.append('ref', scan.savedRepository.ref);
     }
     const res = await request(`/api/scan/${encodeURIComponent(scan.id)}`, { method: 'POST', body: form });
     return res.json();
@@ -343,6 +438,34 @@ export const api = {
   async deleteSkillPack(id: string): Promise<void> {
     await request(`/api/admin/skill-packs/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
+
+  repositories: async (): Promise<SavedRepository[]> => (await request('/api/repositories')).json(),
+
+  createRepository: async (input: NewRepository): Promise<SavedRepository> => (await send('POST', '/api/repositories', input)).json(),
+
+  updateRepository: async (id: string, change: RepositoryChange): Promise<SavedRepository> =>
+    (await send('PATCH', `/api/repositories/${encodeURIComponent(id)}`, change)).json(),
+
+  async deleteRepository(id: string): Promise<void> {
+    await request(`/api/repositories/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  repositoryRefs: async (id: string): Promise<GitRefs> =>
+    (await request(`/api/repositories/${encodeURIComponent(id)}/refs`, { method: 'POST' })).json(),
+
+  schedules: async (): Promise<Schedule[]> => (await request('/api/schedules')).json(),
+
+  createSchedule: async (input: NewSchedule): Promise<Schedule> => (await send('POST', '/api/schedules', input)).json(),
+
+  updateSchedule: async (id: string, change: Partial<Omit<NewSchedule, 'id'>>): Promise<Schedule> =>
+    (await send('PATCH', `/api/schedules/${encodeURIComponent(id)}`, change)).json(),
+
+  async deleteSchedule(id: string): Promise<void> {
+    await request(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  runSchedule: async (id: string): Promise<ScanStatus> =>
+    (await request(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' })).json(),
 
   /** Artifacts need the bearer header, so they are fetched as a Blob rather than linked. */
   async artifact(id: string, name: string): Promise<Blob> {

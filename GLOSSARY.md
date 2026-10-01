@@ -16,6 +16,14 @@ _Avoid_: Upload, payload, package, zip
 A Git repository, with an optional branch or tag, that a caller names instead of uploading a Source Archive; the server checks out one commit of it (ADR-0010).
 _Avoid_: Repo source, remote, checkout
 
+**Saved Repository**:
+A Source Repository kept on the server under a name, with its default branch or tag and, when private, its token sealed; a Scan or a Scan Schedule names it instead of a URL (ADR-0014).
+_Avoid_: Bookmark, known repo, favourite
+
+**Scan Schedule**:
+A Saved Repository and a Scan's choices, with when the server starts Scans of it by itself: every N hours, daily or on chosen weekdays, at a time in a time zone (ADR-0014). Each time it comes due is one of its runs (`nextRunAt`, "Run now"): a run starts one Scan, or is skipped.
+_Avoid_: Cron job, recurring scan, timer
+
 **Scan Profile**:
 A named kind of analysis a caller can request, bundling the agent skills and instructions that produce its Report.
 _Avoid_: Skill, scan type, analysis type

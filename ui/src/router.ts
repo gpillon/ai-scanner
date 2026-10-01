@@ -7,9 +7,12 @@ export type ScanTab = (typeof SCAN_TABS)[number];
 
 export type Route =
   | { page: 'scans' }
-  | { page: 'new' }
+  /** `repository`: a Saved Repository to start from. */
+  | { page: 'new'; repository?: string }
   | { page: 'scan'; id: string; tab: ScanTab }
   | { page: 'docs' }
+  | { page: 'repositories' }
+  | { page: 'schedules' }
   | { page: 'providers' }
   | { page: 'models' }
   | { page: 'skills' }
@@ -22,8 +25,11 @@ export function parse(hash: string): Route {
     const tab = SCAN_TABS.find((t) => t === scan[2]) ?? 'overview';
     return { page: 'scan', id: decodeURIComponent(scan[1]), tab };
   }
-  if (path === 'new') return { page: 'new' };
+  const fresh = path.match(/^new(?:\?repository=([^&]+))?$/);
+  if (fresh) return fresh[1] ? { page: 'new', repository: decodeURIComponent(fresh[1]) } : { page: 'new' };
   if (path === 'docs') return { page: 'docs' };
+  if (path === 'repositories') return { page: 'repositories' };
+  if (path === 'schedules') return { page: 'schedules' };
   if (path === 'admin/providers') return { page: 'providers' };
   if (path === 'admin/models') return { page: 'models' };
   if (path === 'admin/skills') return { page: 'skills' };
@@ -39,9 +45,13 @@ export function href(route: Route): string {
     case 'scans':
       return '#/scans';
     case 'new':
-      return '#/new';
+      return route.repository ? `#/new?repository=${encodeURIComponent(route.repository)}` : '#/new';
     case 'docs':
       return '#/docs';
+    case 'repositories':
+      return '#/repositories';
+    case 'schedules':
+      return '#/schedules';
     case 'providers':
       return '#/admin/providers';
     case 'models':

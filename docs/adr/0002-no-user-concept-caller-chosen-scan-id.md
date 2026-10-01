@@ -7,6 +7,7 @@ We chose this because the callers are other systems that already have their own 
 ## Consequences
 
 - Amended by ADR-0006: an optional admin token also exists, for managing the Model Pool. Callers still share one token.
+- Amended by ADR-0014: the Scans of a private Saved Repository are read with the admin token only, as they quote its code.
 
 - A `POST` to an existing id returns `409`. There is no silent idempotency, because the uploaded Source Archive may differ. A caller who wants to redo a Scan sends `DELETE` and then `POST`.
 - `DELETE` stops a running Scan and removes everything. The id becomes free again, exactly as when retention expires (365 days, then `404`).

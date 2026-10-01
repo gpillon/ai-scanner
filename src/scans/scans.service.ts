@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { open, mkdir, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -11,8 +11,10 @@ import { ModelPool } from '../models/model-pool.service';
 import { paths } from '../common/paths';
 import { ProfileRegistry } from '../profiles/profile-registry.service';
 import { Scan } from './entities/scan.entity';
+import { SkillPack } from '../skills/entities/skill-pack.entity';
 import { SkillPacks } from '../skills/skill-packs.service';
 import { GitSources } from './git-sources.service';
+import { Requester, SavedRepositories } from '../repositories/saved-repositories.service';
 import { ScanSupervisor } from './scan-supervisor.service';
 
 export const SCAN_ID_PATTERN = /^[a-z0-9-]{1,64}$/;
@@ -24,6 +26,14 @@ export const ARTIFACT_CONTENT_TYPES: Record<string, string> = {
   'findings.json': 'application/json; charset=utf-8',
 };
 
+/** What a Scan runs with besides its source: checked when it is submitted, and when a Scan Schedule is saved. */
+export interface ScanChoices {
+  profile: string;
+  model?: string;
+  instructions?: string;
+  skillPacks?: string[];
+}
+
 export interface CreateScanInput {
   id: string;
   archivePath?: string;
@@ -32,6 +42,12 @@ export interface CreateScanInput {
   ref?: string;
   gitUsername?: string;
   gitToken?: string;
+  /** Instead of the archive or repoUrl: a Saved Repository, with its stored credentials (ADR-0014). */
+  repository?: string;
+  /** The Scan Schedule starting it; never from a caller. */
+  schedule?: string;
+  /** Who submits it: a private Saved Repository is the admin's (ADR-0014). */
+  by?: Requester;
   profile: string;
   model?: string;
   language?: string;
@@ -65,32 +81,29 @@ export class ScansService {
     private readonly clock: Clock,
     private readonly skillPacks: SkillPacks,
     private readonly git: GitSources,
+    private readonly repositories: SavedRepositories,
   ) {}
 
   async create(input: CreateScanInput): Promise<Scan> {
     if (!SCAN_ID_PATTERN.test(input.id)) {
       throw new BadRequestException('Scan id must be 1-64 characters: lowercase letters, digits and dashes');
     }
-    if (input.archivePath && input.repoUrl) throw new BadRequestException('Give a Source Archive or a repository URL, not both');
-    if (!input.archivePath && !input.repoUrl) {
-      throw new BadRequestException('A Source Archive (multipart field "file") or a repository URL (field "repoUrl") is required');
-    }
-    if (input.archivePath && !(await looksLikeZip(input.archivePath))) throw new BadRequestException('Source Archive must be a zip file');
-    if (!input.repoUrl && (input.ref || input.gitUsername || input.gitToken)) {
-      throw new BadRequestException('ref and the Git credentials go with repoUrl only');
-    }
-    if (!this.profiles.get(input.profile)) throw new BadRequestException(`Unknown Scan Profile: ${input.profile}`);
-    const model = await this.models.resolve(input.model);
-    if (!model) {
+    const sources = [input.archivePath, input.repoUrl, input.repository].filter(Boolean).length;
+    if (sources > 1) throw new BadRequestException('Give one of a Source Archive, a repository URL or a Saved Repository');
+    if (!sources) {
       throw new BadRequestException(
-        input.model ? `Model is not in the Model Pool: ${input.model}` : 'The Model Pool has no Default Model: choose a model',
+        'A Source Archive (multipart field "file"), a repository URL (field "repoUrl") or a Saved Repository (field "repository") is required',
       );
     }
-    const packs = input.skillPacks?.length ? await this.skillPacks.resolve(input.skillPacks) : [];
-    const instructions = input.instructions || null;
-    if (instructions && instructions.length > this.config.maxInstructionsLength) {
-      throw new BadRequestException(`Instructions exceed ${this.config.maxInstructionsLength} characters`);
+    if (input.archivePath && !(await looksLikeZip(input.archivePath))) throw new BadRequestException('Source Archive must be a zip file');
+    if (!input.repoUrl && (input.gitUsername || input.gitToken)) {
+      throw new BadRequestException(
+        input.repository ? 'A Saved Repository uses its stored credentials' : 'The Git credentials go with repoUrl only',
+      );
     }
+    if (input.archivePath && input.ref) throw new BadRequestException('ref goes with repoUrl or repository only');
+    const { model, packs } = await this.checkChoices(input);
+    const instructions = input.instructions || null;
 
     const scan = this.scans.create({
       id: input.id,
@@ -112,10 +125,22 @@ export class ScansService {
 
     // Fetched before the Scan exists: a repository that cannot be read leaves nothing behind.
     let checkout: string | undefined;
-    if (input.repoUrl) {
+    if (input.repoUrl || input.repository) {
+      const saved = input.repository ? await this.repositories.access(input.repository, input.by ?? 'caller') : undefined;
+      const repoUrl = saved?.url ?? input.repoUrl!;
+      const ref = input.ref || saved?.ref || undefined;
+      const credentials = saved?.credentials ?? { username: input.gitUsername, token: input.gitToken };
       checkout = join(paths.incoming(this.config.dataDir), `git-${randomUUID()}`);
-      const fetched = await this.git.fetch(input.repoUrl, input.ref, { username: input.gitUsername, token: input.gitToken }, checkout);
-      scan.source = { type: 'git', url: fetched.url, ref: input.ref || null, commit: fetched.commit };
+      const fetched = await this.git.fetch(repoUrl, ref, credentials, checkout);
+      scan.source = {
+        type: 'git',
+        url: fetched.url,
+        ref: ref ?? null,
+        commit: fetched.commit,
+        ...(input.repository && { repository: input.repository }),
+        ...(input.schedule && { schedule: input.schedule }),
+        ...(credentials.token && input.repository && { private: true as const }),
+      };
     }
     // The queue must not start the Scan before its Source Archive is in place; releasing wakes it.
     const release = this.supervisor.hold(input.id);
@@ -154,10 +179,33 @@ export class ScansService {
     return scan;
   }
 
-  async get(id: string): Promise<Scan> {
+  /** The Model Pool entry and Skill Packs the choices name; a 400 for what does not exist. */
+  async checkChoices(choices: ScanChoices): Promise<{ model: string; packs: SkillPack[] }> {
+    if (!this.profiles.get(choices.profile)) throw new BadRequestException(`Unknown Scan Profile: ${choices.profile}`);
+    const model = await this.models.resolve(choices.model);
+    if (!model) {
+      throw new BadRequestException(
+        choices.model ? `Model is not in the Model Pool: ${choices.model}` : 'The Model Pool has no Default Model: choose a model',
+      );
+    }
+    const packs = choices.skillPacks?.length ? await this.skillPacks.resolve(choices.skillPacks) : [];
+    if (choices.instructions && choices.instructions.length > this.config.maxInstructionsLength) {
+      throw new BadRequestException(`Instructions exceed ${this.config.maxInstructionsLength} characters`);
+    }
+    return { model, packs };
+  }
+
+  /** `by`: who asks, when a token holder does; a private Scan is the admin's (ADR-0014). */
+  async get(id: string, by?: Requester): Promise<Scan> {
     const scan = await this.scans.findOneBy({ id });
     if (!scan) throw new NotFoundException(`Scan ${id} not found`);
+    if (by === 'caller' && scan.source?.private) throw new ForbiddenException(`Scan ${id} is of a private repository: it needs the admin token`);
     return scan;
+  }
+
+  /** Whether `by` may read the Scan: what the list shows. */
+  readableBy(scan: Scan, by: Requester): boolean {
+    return by !== 'caller' || !scan.source?.private;
   }
 
   /** Every Scan any caller started, newest first: whoever holds the token sees them all. */
@@ -169,8 +217,8 @@ export class ScansService {
     return scan.state === 'succeeded' ? this.store.list(scan.id) : [];
   }
 
-  async artifact(id: string, name: string): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
-    const scan = await this.get(id);
+  async artifact(id: string, name: string, by?: Requester): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
+    const scan = await this.get(id, by);
     const contentType = Object.hasOwn(ARTIFACT_CONTENT_TYPES, name) ? ARTIFACT_CONTENT_TYPES[name] : undefined;
     if (!contentType || !(await this.artifactNames(scan)).includes(name)) {
       throw new NotFoundException(`Artifact ${name} not found`);
@@ -179,8 +227,8 @@ export class ScansService {
   }
 
   /** Stops the Scan if it is queued or runs, then removes it with all its data. The id is free afterwards. */
-  async delete(id: string): Promise<void> {
-    await this.get(id);
+  async delete(id: string, by?: Requester): Promise<void> {
+    await this.get(id, by);
     const release = await this.supervisor.cancel(id);
     try {
       await rm(paths.scanDir(this.config.dataDir, id), { recursive: true, force: true });

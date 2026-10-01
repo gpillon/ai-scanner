@@ -27,13 +27,15 @@ import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, SCAN_ID_PATTERN, type Model, type Profile, type SkillPack } from '../api';
 import { emptyGitSource, GitSourceFields, type GitSourceValue } from '../components/GitSourceFields';
+import { SavedRepositoryFields } from '../components/SavedRepositoryFields';
 import { TagSelect } from '../components/TagSelect';
 import { navigate, scanRoute } from '../router';
 
 /** Random, so callers never pick the same id by chance. */
 const newScanId = (): string => crypto.randomUUID();
 
-export function NewScanPage() {
+/** `repository`: a Saved Repository to start from. */
+export function NewScanPage({ repository, isAdmin = false }: { repository?: string; isAdmin?: boolean } = {}) {
   const [profiles, setProfiles] = useState<Profile[]>();
   const [models, setModels] = useState<Model[]>();
   const [loadError, setLoadError] = useState<string>();
@@ -45,8 +47,9 @@ export function NewScanPage() {
   const [instructions, setInstructions] = useState('');
   const [timeout, setTimeoutMinutes] = useState('');
   const [file, setFile] = useState<File>();
-  const [sourceKind, setSourceKind] = useState<'zip' | 'git'>('zip');
+  const [sourceKind, setSourceKind] = useState<'zip' | 'git' | 'saved'>(repository ? 'saved' : 'zip');
   const [git, setGit] = useState<GitSourceValue>(emptyGitSource);
+  const [saved, setSaved] = useState({ id: repository ?? '', ref: '' });
   const [packs, setPacks] = useState<SkillPack[]>([]);
   const [chosenPacks, setChosenPacks] = useState<string[]>([]);
 
@@ -67,7 +70,7 @@ export function NewScanPage() {
   }, []);
 
   const idValid = SCAN_ID_PATTERN.test(id);
-  const hasSource = sourceKind === 'zip' ? Boolean(file) : Boolean(git.url.trim());
+  const hasSource = sourceKind === 'zip' ? Boolean(file) : sourceKind === 'git' ? Boolean(git.url.trim()) : Boolean(saved.id);
   // Empty: the server setting. Otherwise whole minutes, as the server accepts them.
   const timeoutValid = timeout.trim() === '' || (/^\d+$/.test(timeout.trim()) && +timeout >= 1 && +timeout <= 1440);
   const canSubmit = idValid && Boolean(profile) && hasSource && timeoutValid && !submitting;
@@ -83,7 +86,9 @@ export function NewScanPage() {
         id,
         ...(sourceKind === 'zip'
           ? { file }
-          : {
+          : sourceKind === 'saved'
+            ? { savedRepository: { id: saved.id, ref: saved.ref.trim() || undefined } }
+            : {
               repo: {
                 url: git.url.trim(),
                 ref: git.ref.trim() || undefined,
@@ -109,7 +114,7 @@ export function NewScanPage() {
       <PageSection>
         <Content>
           <Title headingLevel="h1">New Scan</Title>
-          <p>Upload a zip of source code and choose the analysis to run on it.</p>
+          <p>Upload a zip of source code, or name a Git repository, and choose the analysis to run on it.</p>
         </Content>
       </PageSection>
       <PageSection isFilled>
@@ -140,10 +145,19 @@ export function NewScanPage() {
                       onChange={() => setSourceKind('git')}
                       isDisabled={submitting}
                     />
+                    <ToggleGroupItem
+                      text="Saved repository"
+                      buttonId="source-saved"
+                      isSelected={sourceKind === 'saved'}
+                      onChange={() => setSourceKind('saved')}
+                      isDisabled={submitting}
+                    />
                   </ToggleGroup>
                 </FormGroup>
 
-                {sourceKind === 'git' ? (
+                {sourceKind === 'saved' ? (
+                  <SavedRepositoryFields value={saved} onChange={setSaved} isDisabled={submitting} isAdmin={isAdmin} />
+                ) : sourceKind === 'git' ? (
                   <GitSourceFields value={git} onChange={setGit} isDisabled={submitting} />
                 ) : (
                 <FormGroup label="Source Archive" isRequired fieldId="archive">

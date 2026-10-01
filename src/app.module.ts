@@ -11,7 +11,9 @@ import { Runner } from './runner/runner';
 import { PoolModel } from './models/entities/pool-model.entity';
 import { PoolSeed } from './models/entities/pool-seed.entity';
 import { Provider } from './models/entities/provider.entity';
+import { SavedRepository } from './repositories/entities/saved-repository.entity';
 import { Scan } from './scans/entities/scan.entity';
+import { ScanSchedule } from './schedules/entities/scan-schedule.entity';
 import { LibrarySkill } from './skills/entities/library-skill.entity';
 import { SkillPack } from './skills/entities/skill-pack.entity';
 import { SkillsModule } from './skills/skills.module';
@@ -33,7 +35,7 @@ export class AppModule {
         TypeOrmModule.forRoot({
           type: 'better-sqlite3',
           database: paths.database(config.dataDir),
-          entities: [Scan, Provider, PoolModel, PoolSeed, LibrarySkill, SkillPack],
+          entities: [Scan, Provider, PoolModel, PoolSeed, LibrarySkill, SkillPack, SavedRepository, ScanSchedule],
           synchronize: true, // PoC: the schema is one table
         }),
         ScansModule.register(overrides.runner),

@@ -9,6 +9,12 @@ export interface ScanSource {
   /** As the caller asked; null for the default branch. */
   ref: string | null;
   commit: string;
+  /** The Saved Repository it was fetched as, if any (ADR-0014). */
+  repository?: string;
+  /** The Scan Schedule that started the Scan, if any (ADR-0014). */
+  schedule?: string;
+  /** Fetched with a Saved Repository's stored token: only the admin token reads the Scan (ADR-0014). */
+  private?: true;
 }
 
 /** `warming`: waiting for the model to answer, before the first Attempt (ADR-0009). */

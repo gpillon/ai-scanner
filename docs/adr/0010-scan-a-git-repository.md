@@ -20,3 +20,7 @@ Git LFS objects are not fetched; their pointer files are what the agent reads.
 - Fetching asynchronously, in a new Scan state, was rejected for now. The credentials would have to outlive the request, and a one-commit fetch takes seconds. The POST waits at most `SCANNER_GIT_TIMEOUT_SECONDS`; the chart's Route timeout allows for it.
 - Re-zipping the checkout to reuse the archive path was rejected. It needs a zip writer, and it would add a step that changes nothing about the trust in the code.
 - Storing credentials to fetch again later (for a retry, say) was rejected: the checkout is kept for the Scan's whole life instead.
+
+## Consequences
+
+- Amended by ADR-0014: a Saved Repository stores its token, sealed under `SCANNER_SECRET_KEY`, so that Scan Schedules can fetch private repositories. Credentials given with `repoUrl` are still never stored.

@@ -18,6 +18,7 @@ import {
   ApiConflictResponse,
   ApiConsumes,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
@@ -26,6 +27,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import type { AuthenticatedRequest } from '../auth/bearer.guard';
 import { ArchiveUploadInterceptor } from './archive-upload.interceptor';
 import { CreateScanDto } from './dto/create-scan.dto';
 import { ScanStatusDto } from './dto/scan-status.dto';
@@ -67,16 +69,17 @@ export class ScansController {
   @ApiCreatedResponse({ type: ScanStatusDto, description: 'Scan accepted, in state `queued`' })
   @ApiBadRequestResponse({ description: 'Invalid id, archive, profile, model, language, instructions or Attempt timeout' })
   @ApiConflictResponse({ description: 'A Scan with this id already exists' })
-  async create(@Param('id') id: string, @Body() body: CreateScanDto, @Req() req: { file?: { path: string } }) {
-    const scan = await this.scans.create({ id, archivePath: req.file?.path, ...body });
+  @ApiForbiddenResponse({ description: 'A private Saved Repository needs the admin token' })
+  async create(@Param('id') id: string, @Body() body: CreateScanDto, @Req() req: AuthenticatedRequest & { file?: { path: string } }) {
+    const scan = await this.scans.create({ id, archivePath: req.file?.path, ...body, by: req.role });
     return ScanStatusDto.from(scan, []);
   }
 
   @Get('scans')
-  @ApiOperation({ summary: 'List every Scan, newest first' })
+  @ApiOperation({ summary: 'List every Scan the token may read, newest first' })
   @ApiOkResponse({ type: [ScanStatusDto] })
-  async list() {
-    const scans = await this.scans.list();
+  async list(@Req() req: AuthenticatedRequest) {
+    const scans = (await this.scans.list()).filter((scan) => this.scans.readableBy(scan, req.role));
     return Promise.all(scans.map(async (scan) => ScanStatusDto.from(scan, await this.scans.artifactNames(scan))));
   }
 
@@ -84,8 +87,9 @@ export class ScansController {
   @ApiOperation({ summary: 'Scan status' })
   @ApiOkResponse({ type: ScanStatusDto })
   @ApiNotFoundResponse({ description: 'Unknown, deleted or expired Scan' })
-  async status(@Param('id') id: string) {
-    const scan = await this.scans.get(id);
+  @ApiForbiddenResponse({ description: 'A Scan of a private Saved Repository needs the admin token' })
+  async status(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    const scan = await this.scans.get(id, req.role);
     return ScanStatusDto.from(scan, await this.scans.artifactNames(scan));
   }
 
@@ -102,7 +106,8 @@ export class ScansController {
   @ApiProduces('text/event-stream')
   @ApiOkResponse({ description: 'The event stream' })
   @ApiNotFoundResponse({ description: 'Unknown, deleted or expired Scan' })
-  events(@Param('id') id: string) {
+  async events(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    await this.scans.get(id, req.role);
     return this.scanEvents.stream(id);
   }
 
@@ -111,8 +116,8 @@ export class ScansController {
   @ApiProduces('text/markdown', 'application/pdf', 'application/json')
   @ApiOkResponse({ description: 'The Artifact file' })
   @ApiNotFoundResponse({ description: 'Unknown Scan or Artifact, or the Scan has not succeeded' })
-  async artifact(@Param('id') id: string, @Param('name') name: string) {
-    const { stream, contentType } = await this.scans.artifact(id, name);
+  async artifact(@Param('id') id: string, @Param('name') name: string, @Req() req: AuthenticatedRequest) {
+    const { stream, contentType } = await this.scans.artifact(id, name, req.role);
     return new StreamableFile(stream as never, { type: contentType });
   }
 
@@ -121,7 +126,7 @@ export class ScansController {
   @ApiOperation({ summary: 'Stop (if running) and remove a Scan with all its data' })
   @ApiNoContentResponse({ description: 'Scan removed; the id is free again' })
   @ApiNotFoundResponse({ description: 'Unknown, deleted or expired Scan' })
-  async remove(@Param('id') id: string): Promise<void> {
-    await this.scans.delete(id);
+  async remove(@Param('id') id: string, @Req() req: AuthenticatedRequest): Promise<void> {
+    await this.scans.delete(id, req.role);
   }
 }

@@ -95,6 +95,18 @@ describe('access and discovery', () => {
         'GET /api/scan/{id}/events',
         'GET /api/profiles',
         'GET /api/models',
+        'GET /api/repositories',
+        'POST /api/repositories',
+        'GET /api/repositories/{id}',
+        'PATCH /api/repositories/{id}',
+        'DELETE /api/repositories/{id}',
+        'POST /api/repositories/{id}/refs',
+        'GET /api/schedules',
+        'POST /api/schedules',
+        'GET /api/schedules/{id}',
+        'PATCH /api/schedules/{id}',
+        'DELETE /api/schedules/{id}',
+        'POST /api/schedules/{id}/run',
       ].sort(),
     );
   });

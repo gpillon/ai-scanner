@@ -29,6 +29,8 @@ import { DocsPage } from './pages/DocsPage';
 import { LoginPage } from './pages/LoginPage';
 import { ModelsPage } from './pages/ModelsPage';
 import { ProvidersPage } from './pages/ProvidersPage';
+import { RepositoriesPage } from './pages/RepositoriesPage';
+import { SchedulesPage } from './pages/SchedulesPage';
 import { SkillPacksPage } from './pages/SkillPacksPage';
 import { SkillsPage } from './pages/SkillsPage';
 import { NewScanPage } from './pages/NewScanPage';
@@ -115,6 +117,12 @@ export function App() {
             <NavItem to={href({ page: 'scans' })} isActive={route.page === 'scans' || route.page === 'scan'}>
               Scans
             </NavItem>
+            <NavItem to={href({ page: 'repositories' })} isActive={route.page === 'repositories'}>
+              Repositories
+            </NavItem>
+            <NavItem to={href({ page: 'schedules' })} isActive={route.page === 'schedules'}>
+              Schedules
+            </NavItem>
             <NavItem to={href({ page: 'docs' })} isActive={route.page === 'docs'}>
               Documentation
             </NavItem>
@@ -142,9 +150,11 @@ export function App() {
 
   return (
     <Page masthead={masthead} sidebar={sidebar} isManagedSidebar>
-      {route.page === 'new' && <NewScanPage />}
+      {route.page === 'new' && <NewScanPage key={route.repository ?? ''} repository={route.repository} isAdmin={role === 'admin'} />}
       {route.page === 'scans' && <ScansPage />}
       {route.page === 'scan' && <ScanDetailPage key={route.id} id={route.id} tab={route.tab} />}
+      {route.page === 'repositories' && <RepositoriesPage isAdmin={role === 'admin'} />}
+      {route.page === 'schedules' && <SchedulesPage isAdmin={role === 'admin'} />}
       {route.page === 'docs' && <DocsPage />}
       {route.page === 'models' && <ModelsPage />}
       {route.page === 'providers' && <ProvidersPage />}

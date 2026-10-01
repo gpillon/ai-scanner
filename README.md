@@ -62,6 +62,11 @@ curl -H "Authorization: Bearer $TOKEN" -F profile=security \
      -F repoUrl=https://github.com/acme/app.git -F ref=main -F gitToken=<read-only token> \
      localhost:3000/api/scan/$ID
 
+# Or save the repository once, then scan it by name, now or on a schedule (ADR-0014).
+curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json'      -d '{"id":"app","url":"https://github.com/acme/app.git","ref":"main","token":"<read-only token>"}'      localhost:3000/api/repositories
+curl -H "Authorization: Bearer $TOKEN" -F profile=security -F repository=app localhost:3000/api/scan/$ID
+curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json'      -d '{"id":"app-nightly","repository":"app","profile":"security","cadence":"daily","time":"02:00","timeZone":"Europe/Rome"}'      localhost:3000/api/schedules
+
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scans              # every Scan, newest first
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scan/$ID          # queued → warming → running → succeeded | failed, and token usage
 curl -N -H "Authorization: Bearer $TOKEN" localhost:3000/api/scan/$ID/events  # follow it live (server-sent events)
@@ -73,6 +78,10 @@ curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:3000/api/scan/$ID  # 
 
 A **Git repository** can replace the zip ([ADR-0010](docs/adr/0010-scan-a-git-repository.md)). The server checks out one commit of `ref` (or the default branch) while answering the POST, and keeps it with the Scan. Credentials, for a private repository, are used for that one fetch and never stored. Prefer a read-only token; GitHub and GitLab accept it with any username, `oauth2` by default. Only https is used, symlinks arrive as plain files, Git LFS objects are not fetched, and loopback and link-local hosts are refused. Set `SCANNER_GIT_HOSTS` to restrict the hosts, since any holder of the caller token can make the server fetch from your internal network. The New Scan form offers the same, with a button that lists the repository's branches and tags.
 
+A **Saved Repository** keeps a repository under a name, with its default branch or tag and, if private, its token ([ADR-0014](docs/adr/0014-saved-repositories-and-scan-schedules.md)). Its token is stored encrypted under `SCANNER_SECRET_KEY`, which is required to save one, and never sent back. Anyone with the caller token can scan a public one with `repository=<id>` (and an optional `ref`). A **private** one, with a stored token, is the admin's: only `SCANNER_ADMIN_TOKEN` stores the token, scans the repository, lists its branches, changes or removes it, and manages its schedules; the caller token gets `403`. Scheduled Scans of it run with the stored token. Its Scans quote its code, so they are the admin's too: the caller token does not list them and gets `403` on them. A repository with a stored token cannot be moved to another host without typing the token again.
+
+A **Scan Schedule** starts Scans of a Saved Repository by itself: every N hours (`cadence: interval`, `intervalHours`), daily (`daily`, `time`) or on chosen days (`weekly`, `time`, `weekdays` 0-6 from Sunday), at a time in an IANA `timeZone`, daylight saving included. Its Scans are ordinary Scans named `<schedule>-<yyyymmdd>-<hhmmss>` (UTC). A run is skipped while the previous Scan of the schedule has not finished; a server that was down starts one Scan for the runs it missed. `lastError` says why the last run started no Scan. `POST /api/schedules/<id>/run` starts one now. Editing a schedule keeps its next run unless the timing changes or it is switched back on.
+
 `GET /api/scan/<id>` gives the tokens the agent used as `usage`, once an Attempt has reported it ([ADR-0011](docs/adr/0011-parallel-reviewers-and-token-usage.md)). The counts are summed over the Attempts and include every subagent: `input`, `output`, `reasoning`, `cacheRead`, `cacheWrite`, `total`, the `cost` the provider reports (0 when it reports none), and the number of agent `sessions`. They are never in the Report or the Findings. The UI shows them in the Scan's Overview.
 
 The OpenAPI document is at `/api/openapi.json`, and `/api/docs` renders it. Neither requires the token.
@@ -82,7 +91,9 @@ The OpenAPI document is at `/api/openapi.json`, and `/api/docs` renders it. Neit
 The UI lives in [`ui/`](ui): Vite, React, TypeScript and [PatternFly](https://www.patternfly.org). Its pages:
 
 - **Scans**: every Scan on the server, newest first, with live state and a filter.
-- **New Scan**: upload a zip and pick a profile, model, language, instructions and how long each Attempt may run. The Scan id is a random UUID.
+- **New Scan**: upload a zip, name a Git repository or pick a saved one, and choose a profile, model, language, instructions and how long each Attempt may run. The Scan id is a random UUID.
+- **Repositories**: the Saved Repositories, with "Scan now" to open New Scan on one.
+- **Schedules**: the Scan Schedules, with their next and last run, an on/off switch and "Run now".
 - **Scan**: details, failure reason, Artifact downloads, a Findings table, and delete. An **Activity** log shows what the agent does as it does it, and still shows it after the Scan has finished.
 - **Documentation**: the backend's Swagger UI, already signed in with your token.
 - **Administration** (admin token only): **Models**, **Providers**, **Skill Packs** and **Skills**, see below.
@@ -130,7 +141,7 @@ Environment variables, read at startup. `.env.example` has a starting point.
 | --- | --- | --- |
 | `SCANNER_TOKEN` | required | Shared bearer token |
 | `SCANNER_ADMIN_TOKEN` | — | Admin token: opens the admin pages and routes. Without it, administration is disabled |
-| `SCANNER_SECRET_KEY` | — | Encrypts stored Provider API keys (16+ characters). Without it, keys cannot be stored |
+| `SCANNER_SECRET_KEY` | — | Encrypts stored Provider API keys and Saved Repository tokens (16+ characters). Without it, neither can be stored |
 | `SCANNER_MODELS` | — | Seeds the Model Pool on the first start only, JSON: `[{"id","provider","baseUrl?","apiKeyEnv?"}]` |
 | `SCANNER_DEFAULT_MODEL` | first model | Default Model of that seed |
 | `SCANNER_RUNNER` | `auto` | `kubernetes` inside a pod, `podman` elsewhere; or set one of them, or `fake` (a placeholder Report) |
@@ -234,6 +245,8 @@ src/          NestJS backend, one folder per feature module
   config/     environment variables to AppConfig
   common/     Clock, on-disk paths, app root
   scans/      Scans: controller, service, supervisor, retention, upload, DTOs, entity
+  repositories/  Saved Repositories and their sealed tokens
+  schedules/  Scan Schedules: timing and the loop that starts their Scans (registered in the Scans module, whose ScansService they use)
   runner/     Runner port, Podman, Kubernetes and fake adapters, the agent spec they share
   profiles/   Scan Profiles and GET /api/profiles
   models/     Model Pool and Providers (database), discovery, GET /api/models, /api/admin

@@ -128,8 +128,8 @@ describe('Scans from a Git repository', () => {
       ['credentials in the URL', { repoUrl: 'https://user:pw@example.com/a.git' }, /credential fields/],
       ['a ref that looks like an option', { repoUrl: 'URL', ref: '--upload-pack=touch /tmp/pwned' }, /Not a branch or tag/],
       ['an unknown ref', { repoUrl: 'URL', ref: 'nope' }, /Cannot read the repository/],
-      ['both a zip and a URL', { repoUrl: 'URL', zip: '1' }, /not both/],
-      ['a ref without a URL', { ref: 'main', zip: '1' }, /go with repoUrl only/],
+      ['both a zip and a URL', { repoUrl: 'URL', zip: '1' }, /Give one of/],
+      ['a ref without a URL', { ref: 'main', zip: '1' }, /goes with repoUrl or repository only/],
     ])('refuses %s', async (_what, fields: Record<string, string>, message) => {
       const { zip, ...rest } = fields;
       const resolved = Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, v === 'URL' ? open.url('app') : v]));
