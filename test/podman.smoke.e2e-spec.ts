@@ -151,6 +151,22 @@ const connect = (authority) => new Promise((done) => {
       expect(skills).not.toContain('planted');
     });
 
+    it("gives opencode the Skill Packs' skills next to the profile's", async () => {
+      const script =
+        "const r = require('child_process').spawnSync('opencode', ['debug', 'skill'], { encoding: 'utf8' });" +
+        "require('fs').writeFileSync('/output/skills.txt', r.stdout + r.stderr);";
+      h = await startProbe(script);
+      const packSkill = '---\nname: pack-probe\ndescription: A Skill Pack skill the smoke test adds.\n---\nCheck things.\n';
+      expect((await h.admin.post('/api/admin/skills').attach('file', makeZip({ 'pack-probe/SKILL.md': packSkill }), 's.zip')).status).toBe(201);
+      expect((await h.admin.post('/api/admin/skill-packs').send({ id: 'probe', description: '', skills: ['pack-probe'] })).status).toBe(201);
+      await h.submit('packs', { profile: 'security', skillPacks: 'probe' });
+      await h.waitForState('packs', 'failed', 5 * MINUTE_MS);
+      const skills = await readFile(join(paths.output(h.dataDir, 'packs'), 'skills.txt'), 'utf8');
+      for (const skill of ['security-review', 'insecure-defaults', 'sharp-edges', 'vulnerability-triage-brocards', 'pack-probe']) {
+        expect(skills).toContain(skill);
+      }
+    });
+
     it('removes agent containers left by a previous process as soon as it starts', async () => {
       const orphan = spawnSync(podman!.executable, ['run', '--detach', '--label', `${SCAN_LABEL}=orphan`, podman!.proxyImage, 'sleep', '600'], {
         encoding: 'utf8',

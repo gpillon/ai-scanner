@@ -26,6 +26,11 @@ RUN npm run build && npm prune --omit=dev && npm cache clean --force
 
 # --- Runtime ---
 FROM ${NODE_IMAGE}
+# git: the `skills` CLI clones Git sources when an admin imports skills (ADR-0008). The server
+# only; the agent image stays without it (ADR-0003).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
     PORT=3000 \
     SCANNER_DATA_DIR=/data
