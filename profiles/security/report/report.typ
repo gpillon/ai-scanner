@@ -93,6 +93,10 @@
   for (i, p) in parts.enumerate() { if calc.odd(i) { strong(p) } else { md-italic(p) } }
 }
 
+// A file path that may wrap after a "/", and only there: raw text never breaks, so a long path
+// in a table column would take the whole width and squeeze the others to a word per line. The
+// break is an empty space, so the path copies out of the PDF as it is.
+#let file-path(p) = text(font: mono, size: 0.86em, ligatures: false, features: (calt: 0), p.split("/").map(box).join([/#h(0pt)]))
 #let inline-code(s) = box(fill: code-bg, inset: (x: 2.5pt), outset: (y: 2.2pt), radius: 2pt, raw(s))
 
 #let md-inline(s) = {
@@ -268,10 +272,8 @@
     ("Scan ID", raw(scan.scanId)),
     ("Date", scan.date),
     ("Scan Profile", scan.profile),
-    ("Model", raw(scan.model)),
     ("Report language", scan.language),
     ("Source", [#scan.files files · #scan.sourceLabel #linebreak() #text(size: 7.5pt, raw(scan.sourceValue))]),
-    ("Attempts", str(scan.attempts)),
   ))
 
   })
@@ -334,7 +336,7 @@
 
 == Exclusions
 #if d.scope.excluded.len() == 0 [None: the whole Source Archive was in scope.] else {
-  data-table((auto, 1fr), ("Path", "Reason"), d.scope.excluded.map(e => (raw(e.path), md-inline(e.reason))))
+  data-table((1fr, 1fr), ("Path", "Reason"), d.scope.excluded.map(e => (file-path(e.path), md-inline(e.reason))))
 }
 
 == Caller Instructions
@@ -366,13 +368,13 @@ Archive at the reported lines; the tinted lines are the ones the Finding points 
   callout(color: sev-color.minimal)[No Finding survived triage.]
 } else {
   data-table(
-    (auto, auto, 1fr, auto, auto),
+    (auto, auto, 1.3fr, 1fr, auto),
     ("ID", "Severity", "Title", "Location", "CWE"),
     d.findings.map(f => (
       text(weight: 600, f.id),
       pill(f.severityLabel, sev-color.at(f.severity)),
       md-inline(f.title),
-      text(size: 8pt, raw(f.location)),
+      text(size: 8pt, file-path(f.location)),
       if f.cwe == none { text(fill: muted)[-] } else { text(size: 8pt, f.cwe) },
     )),
   )
@@ -396,8 +398,8 @@ Archive at the reported lines; the tinted lines are the ones the Finding points 
     if f.confidence != none { h(4pt); box(stroke: 0.6pt + muted, inset: (x: 5pt, y: 2.2pt), radius: 3pt, baseline: 1.8pt, text(size: 7pt, weight: 600, fill: muted, upper(f.confidence + " confidence"))) }
     v(6pt)
     block(width: 100%, fill: soft, inset: 9pt, radius: 3pt, kv(key-width: 26mm, (
-      ("Location", raw(f.location)),
-      ..if f.otherLocations.len() > 0 { (("Also at", f.otherLocations.map(raw).join(", ")),) } else { () },
+      ("Location", file-path(f.location)),
+      ..if f.otherLocations.len() > 0 { (("Also at", f.otherLocations.map(file-path).join(", ")),) } else { () },
       ("Category", or-missing(f.category, f: raw)),
       ("CWE", if f.cweUrl != none { link(f.cweUrl, f.cwe) } else { or-missing(f.cwe, f: v => v) }),
       ("OWASP Top 10", or-missing(f.owasp, f: v => v)),
@@ -460,11 +462,11 @@ vulnerability database: run a software composition analysis tool for complete co
 
 #if d.dismissed.len() == 0 [None reported.] else {
   data-table(
-    (1fr, auto, 1.4fr),
+    (1fr, 1fr, 1.4fr),
     ("Candidate", "Location", "Reason for dismissal"),
     d.dismissed.map(c => (
       md-inline(c.title),
-      if c.location == none { text(fill: muted)[-] } else { text(size: 8pt, raw(c.location)) },
+      if c.location == none { text(fill: muted)[-] } else { text(size: 8pt, file-path(c.location)) },
       md-inline(c.reason),
     )),
   )
