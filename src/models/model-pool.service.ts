@@ -191,15 +191,15 @@ export class ModelPool implements OnModuleInit {
   }
 
   /**
-   * The model options after a change, or undefined when it changes none. A thinking given replaces
-   * the level too, so turning thinking off drops the level that went with it.
+   * The model options after a change, or undefined when it changes none. The level is always the
+   * change's: a thinking given replaces the level too, so turning thinking off drops the level that
+   * went with it, and a level alone keeps the thinking.
    */
   private changedOptions(model: PoolModel, change: ModelChange): ModelOptions | null | undefined {
     if (change.thinking === undefined && change.thinkingLevel === undefined) return undefined;
     return compact({
       thinking: change.thinking === undefined ? model.modelOptions?.thinking : change.thinking,
-      thinkingLevel:
-        change.thinking === undefined && change.thinkingLevel === undefined ? model.modelOptions?.thinkingLevel : change.thinkingLevel,
+      thinkingLevel: change.thinkingLevel,
     });
   }
 
