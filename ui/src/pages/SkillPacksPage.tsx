@@ -2,7 +2,6 @@ import {
   Alert,
   AlertActionCloseButton,
   Button,
-  Checkbox,
   Content,
   EmptyState,
   EmptyStateBody,
@@ -18,7 +17,6 @@ import {
   ModalFooter,
   ModalHeader,
   PageSection,
-  SearchInput,
   Skeleton,
   TextArea,
   TextInput,
@@ -31,6 +29,7 @@ import CubesIcon from '@patternfly/react-icons/dist/esm/icons/cubes-icon';
 import { ActionsColumn, Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api, type LibrarySkill, type SkillPack } from '../api';
+import { TagSelect } from '../components/TagSelect';
 import { href } from '../router';
 
 /** Skill Packs: named groups of library skills a caller can add to a Scan (ADR-0008). */
@@ -159,25 +158,16 @@ export function SkillPacksPage() {
 function PackForm({ pack, library, onClose, onSaved }: { pack?: SkillPack; library: LibrarySkill[]; onClose: () => void; onSaved: () => void }) {
   const [id, setId] = useState(pack?.id ?? '');
   const [description, setDescription] = useState(pack?.description ?? '');
-  const [chosen, setChosen] = useState(new Set(pack?.skills.map((s) => s.name) ?? []));
-  const [filter, setFilter] = useState('');
+  const [chosen, setChosen] = useState<string[]>(pack?.skills.map((s) => s.name) ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
-
-  const toggle = (name: string, on: boolean) =>
-    setChosen((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(name);
-      else next.delete(name);
-      return next;
-    });
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
     setError(undefined);
     try {
-      const skills = [...chosen];
+      const skills = chosen;
       if (pack) await api.updateSkillPack(pack.id, { description, skills });
       else await api.createSkillPack({ id: id.trim(), description, skills });
       onSaved();
@@ -186,9 +176,6 @@ function PackForm({ pack, library, onClose, onSaved }: { pack?: SkillPack; libra
       setSaving(false);
     }
   }
-
-  const needle = filter.trim().toLowerCase();
-  const shown = library.filter((s) => !needle || `${s.name} ${s.description}`.toLowerCase().includes(needle));
 
   return (
     <Modal variant="medium" isOpen onClose={onClose} aria-labelledby="pack-form">
@@ -208,20 +195,14 @@ function PackForm({ pack, library, onClose, onSaved }: { pack?: SkillPack; libra
           <FormGroup label="Description" fieldId="pack-description">
             <TextArea id="pack-description" value={description} onChange={(_e, v) => setDescription(v)} placeholder="When to add it, e.g. Java and Spring codebases" resizeOrientation="vertical" />
           </FormGroup>
-          <FormGroup label={`Skills (${chosen.size} chosen)`} isRequired fieldId="pack-skills" role="group">
-            <SearchInput placeholder="Filter skills" value={filter} onChange={(_e, v) => setFilter(v)} onClear={() => setFilter('')} />
-            <div className="app-modal-scroll app-checklist">
-              {shown.map((s) => (
-                <Checkbox
-                  key={s.name}
-                  id={`pack-skill-${s.name}`}
-                  label={<code>{s.name}</code>}
-                  description={s.description}
-                  isChecked={chosen.has(s.name)}
-                  onChange={(_e, on) => toggle(s.name, on)}
-                />
-              ))}
-            </div>
+          <FormGroup label={`Skills (${chosen.length})`} isRequired fieldId="pack-skills" role="group">
+            <TagSelect
+              id="pack-skills"
+              placeholder="Add skills from the library"
+              options={library.map((s) => ({ value: s.name, description: s.description }))}
+              selected={chosen}
+              onChange={setChosen}
+            />
           </FormGroup>
           {error && (
             <Alert variant="danger" isInline title="Not saved">
@@ -231,7 +212,7 @@ function PackForm({ pack, library, onClose, onSaved }: { pack?: SkillPack; libra
         </Form>
       </ModalBody>
       <ModalFooter>
-        <Button variant="primary" type="submit" form="pack-form-body" isLoading={saving} isDisabled={saving || !chosen.size || (!pack && !id.trim())}>
+        <Button variant="primary" type="submit" form="pack-form-body" isLoading={saving} isDisabled={saving || !chosen.length || (!pack && !id.trim())}>
           {pack ? 'Save' : 'Create'}
         </Button>
         <Button variant="link" onClick={onClose}>

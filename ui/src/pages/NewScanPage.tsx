@@ -4,7 +4,6 @@ import {
   Button,
   Card,
   CardBody,
-  Checkbox,
   FileUpload,
   Form,
   FormGroup,
@@ -25,6 +24,7 @@ import {
 import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, SCAN_ID_PATTERN, type Model, type Profile, type SkillPack } from '../api';
+import { TagSelect } from '../components/TagSelect';
 import { navigate, scanRoute } from '../router';
 
 /** Random, so callers never pick the same id by chance. */
@@ -145,19 +145,18 @@ export function NewScanPage() {
 
                 {packs.length > 0 && (
                   <FormGroup label="Skill Packs" fieldId="skill-packs" role="group">
-                    <div className="app-checklist">
-                      {packs.map((p) => (
-                        <Checkbox
-                          key={p.id}
-                          id={`pack-${p.id}`}
-                          label={p.id}
-                          description={`${p.description ? `${p.description} · ` : ''}${p.skills.map((s) => s.name).join(', ')}`}
-                          isChecked={chosenPacks.includes(p.id)}
-                          isDisabled={submitting}
-                          onChange={(_e, on) => setChosenPacks((prev) => (on ? [...prev, p.id] : prev.filter((x) => x !== p.id)))}
-                        />
-                      ))}
-                    </div>
+                    <TagSelect
+                      id="skill-packs"
+                      color="purple"
+                      placeholder="None: add Skill Packs"
+                      options={packs.map((p) => ({
+                        value: p.id,
+                        description: `${p.description ? `${p.description} · ` : ''}${p.skills.map((s) => s.name).join(', ')}`,
+                      }))}
+                      selected={chosenPacks}
+                      onChange={setChosenPacks}
+                      isDisabled={submitting}
+                    />
                     <FormHelperText>
                       <HelperText>
                         <HelperTextItem>Extra skills for the agent, on top of the Scan Profile's, e.g. for the codebase's language.</HelperTextItem>
