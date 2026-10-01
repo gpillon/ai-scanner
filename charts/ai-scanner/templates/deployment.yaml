@@ -54,6 +54,9 @@ spec:
               value: kubernetes
             - name: SCANNER_DATA_DIR
               value: /data
+            # The root filesystem is read-only: tools the server runs (git, npm) write under HOME.
+            - name: HOME
+              value: /tmp
             # The Runner reads its own pod to discover the claim, node, image and egress Service.
             - name: POD_NAME
               valueFrom:
