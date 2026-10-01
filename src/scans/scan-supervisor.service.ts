@@ -315,6 +315,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
             egress,
             modelEgress,
             attemptTimeoutMs: scan.attemptTimeoutMinutes ? scan.attemptTimeoutMinutes * MINUTE_MS : this.config.attemptTimeoutMs,
+            leadReadsCode: profile.leadReadsCode,
           },
           scanTimer,
         );

@@ -180,6 +180,7 @@ describe('Kubernetes Runner', () => {
       egress: ['api.anthropic.com:443', 'llm.internal:8000'],
       modelEgress: ['api.anthropic.com:443'],
       attemptTimeoutMs: 240 * 60_000,
+      leadReadsCode: true,
       ...over,
     };
   }

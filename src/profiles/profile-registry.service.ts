@@ -8,6 +8,11 @@ export interface ScanProfile {
   name: string;
   description: string;
   producesFindings: boolean;
+  /**
+   * Whether the main agent may read the code itself. False makes it a lead that only maps the
+   * codebase and coordinates `reviewer` subagents, which do all the reading (ADR-0012).
+   */
+  leadReadsCode: boolean;
   promptTemplate: string;
   /** Directory of the agent skills the profile brings, one `<skill>/SKILL.md` each; absent when it has none. */
   skillsDir?: string;
@@ -36,6 +41,7 @@ export class ProfileRegistry {
         name: meta.name,
         description: meta.description,
         producesFindings: Boolean(meta.producesFindings),
+        leadReadsCode: meta.leadReadsCode !== false,
         promptTemplate: readFileSync(join(dir, 'prompt.md'), 'utf8'),
         skillsDir: existsSync(join(dir, 'skills')) ? join(dir, 'skills') : undefined,
         report,

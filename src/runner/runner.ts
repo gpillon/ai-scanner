@@ -24,6 +24,8 @@ export interface AttemptRequest {
   modelEgress: string[];
   /** How long the supervisor lets the Attempt run: the Scan's own setting, or the server's. */
   attemptTimeoutMs: number;
+  /** The Scan Profile's choice: false keeps the main agent to coordinating reviewers (ADR-0012). */
+  leadReadsCode: boolean;
 }
 
 /** A Model Pool model as the agent needs it. */

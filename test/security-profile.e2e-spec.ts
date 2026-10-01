@@ -62,6 +62,10 @@ describe('the security Scan Profile', () => {
     });
   });
 
+  it('keeps its lead to coordinating reviewers (ADR-0012)', () => {
+    expect(JSON.parse(readFileSync(join(profileDir, 'profile.json'), 'utf8')).leadReadsCode).toBe(false);
+  });
+
   it('tells the agent the one output file the supervisor validates, and that the server writes the Report', () => {
     expect(prompt).toContain('`/output/findings.json`');
     expect(prompt).toContain('do not write `report.md`');
