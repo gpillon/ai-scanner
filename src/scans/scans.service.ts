@@ -10,6 +10,7 @@ import { ModelPool } from '../models/model-pool.service';
 import { paths } from '../common/paths';
 import { ProfileRegistry } from '../profiles/profile-registry.service';
 import { Scan } from './entities/scan.entity';
+import { SkillPacks } from '../skills/skill-packs.service';
 import { ScanSupervisor } from './scan-supervisor.service';
 
 export const SCAN_ID_PATTERN = /^[a-z0-9-]{1,64}$/;
@@ -28,6 +29,7 @@ export interface CreateScanInput {
   model?: string;
   language?: string;
   instructions?: string;
+  skillPacks?: string[];
 }
 
 const ZIP_MAGICS = [Buffer.from('PK\x03\x04', 'latin1'), Buffer.from('PK\x05\x06', 'latin1')];
@@ -53,6 +55,7 @@ export class ScansService {
     private readonly store: ArtifactStore,
     private readonly supervisor: ScanSupervisor,
     private readonly clock: Clock,
+    private readonly skillPacks: SkillPacks,
   ) {}
 
   async create(input: CreateScanInput): Promise<Scan> {
@@ -68,6 +71,7 @@ export class ScansService {
         input.model ? `Model is not in the Model Pool: ${input.model}` : 'The Model Pool has no Default Model: choose a model',
       );
     }
+    const packs = input.skillPacks?.length ? await this.skillPacks.resolve(input.skillPacks) : [];
     const instructions = input.instructions || null;
     if (instructions && instructions.length > this.config.maxInstructionsLength) {
       throw new BadRequestException(`Instructions exceed ${this.config.maxInstructionsLength} characters`);
@@ -85,6 +89,7 @@ export class ScansService {
       startedAt: null,
       finishedAt: null,
       failureReason: null,
+      skillPacks: null,
     });
     if (await this.scans.existsBy({ id: input.id })) throw new ConflictException(`Scan ${input.id} already exists`);
     // The queue must not start the Scan before its Source Archive is in place; releasing wakes it.
@@ -105,8 +110,15 @@ export class ScansService {
         const target = paths.sourceArchive(this.config.dataDir, input.id);
         await mkdir(dirname(target), { recursive: true });
         await rename(input.archivePath, target);
+        if (packs.length) {
+          // A copy of its own: later changes to the packs or the library do not reach this Scan.
+          const profile = this.profiles.get(input.profile)!;
+          scan.skillPacks = await this.skillPacks.snapshot(packs, profile.skillsDir, paths.scanSkills(this.config.dataDir, input.id));
+          await this.scans.update(input.id, { skillPacks: scan.skillPacks });
+        }
       } catch (e) {
         await this.scans.delete(input.id);
+        await rm(paths.scanDir(this.config.dataDir, input.id), { recursive: true, force: true });
         throw e;
       }
     } finally {

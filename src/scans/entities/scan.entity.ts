@@ -1,4 +1,5 @@
 import { Column, Entity, PrimaryColumn } from 'typeorm';
+import type { PackSnapshot } from '../../skills/skill-packs.service';
 
 export type ScanState = 'queued' | 'running' | 'succeeded' | 'failed';
 
@@ -37,4 +38,8 @@ export class Scan {
 
   @Column({ type: 'text', nullable: true })
   failureReason: string | null;
+
+  /** The Skill Packs the caller added, with the skills copied for this Scan (ADR-0008). */
+  @Column({ type: 'simple-json', nullable: true })
+  skillPacks: PackSnapshot[] | null;
 }

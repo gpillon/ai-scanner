@@ -27,7 +27,7 @@ export const PREVIOUS_ATTEMPT_NOTE =
 
 export function buildPrompt(
   profile: ScanProfile,
-  scan: Pick<Scan, 'language' | 'instructions'>,
+  scan: Pick<Scan, 'language' | 'instructions' | 'skillPacks'>,
   attempt: number,
 ): string {
   const parts = [profile.promptTemplate.trimEnd()];
@@ -36,6 +36,14 @@ export function buildPrompt(
       '`/output/findings.json` must be valid against this JSON Schema:\n\n```json\n' +
         JSON.stringify(profile.report?.schema ?? FINDINGS_SCHEMA, null, 2) +
         '\n```',
+    );
+  }
+  const added = scan.skillPacks?.flatMap((p) => p.skills) ?? [];
+  if (added.length) {
+    parts.push(
+      'The caller added these skills, from Skill Packs, to the ones above. Load each that applies to the ' +
+        'codebase and use it alongside them:\n\n' +
+        [...new Map(added.map((s) => [s.name, s])).values()].map((s) => `- \`${s.name}\`: ${s.description}`).join('\n'),
     );
   }
   parts.push(`Write the Report in this language: ${scan.language}.`);
@@ -275,7 +283,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
             transcriptPath,
             prompt: buildPrompt(profile, scan, attempt),
             profile: scan.profile,
-            skillsDir: profile.skillsDir,
+            skillsDir: scan.skillPacks?.length ? paths.scanSkills(this.config.dataDir, id) : profile.skillsDir,
             model: scan.model,
             agentModel,
             egress,

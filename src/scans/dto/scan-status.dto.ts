@@ -13,6 +13,11 @@ export class ScanStatusDto {
   @ApiProperty({ nullable: true, type: String }) finishedAt: string | null;
   @ApiPropertyOptional({ description: 'Present when the Scan failed' }) failureReason?: string;
   @ApiPropertyOptional({ type: [String], description: 'Present when the Scan succeeded' }) artifacts?: string[];
+  @ApiPropertyOptional({
+    description: 'The Skill Packs it runs with, and the skills each gave it (name, sha256 of its files)',
+    example: [{ id: 'java', skills: [{ name: 'spring-security', hash: '…' }] }],
+  })
+  skillPacks?: { id: string; skills: { name: string; hash: string }[] }[];
 
   static from(scan: Scan, artifacts: string[]): ScanStatusDto {
     return {
@@ -25,6 +30,9 @@ export class ScanStatusDto {
       createdAt: scan.createdAt,
       startedAt: scan.startedAt,
       finishedAt: scan.finishedAt,
+      ...(scan.skillPacks?.length && {
+        skillPacks: scan.skillPacks.map((p) => ({ id: p.id, skills: p.skills.map(({ name, hash }) => ({ name, hash })) })),
+      }),
       ...(scan.state === 'failed' && { failureReason: scan.failureReason ?? undefined }),
       ...(scan.state === 'succeeded' && { artifacts }),
     };

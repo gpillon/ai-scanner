@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
 
 const emptyToUndefined = () => Transform(({ value }) => (value === '' ? undefined : value));
 
@@ -23,6 +23,20 @@ export class CreateScanDto {
   @IsString()
   @Matches(/^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/, { message: 'language must be a language code such as "en" or "pt-BR"' })
   language?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Skill Packs to add to the Scan Profile, see GET /api/skill-packs: comma-separated, or the field repeated.',
+  })
+  @Transform(({ value }) =>
+    value === undefined || value === ''
+      ? undefined
+      : (Array.isArray(value) ? value : [value]).flatMap((v: unknown) => String(v).split(',')).map((v: string) => v.trim()).filter(Boolean),
+  )
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  skillPacks?: string[];
 
   @ApiPropertyOptional({ description: 'Short free-text instructions to steer the analysis (length-limited).' })
   @emptyToUndefined()

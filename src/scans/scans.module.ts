@@ -5,6 +5,7 @@ import { ModelsModule } from '../models/models.module';
 import { ProfilesModule } from '../profiles/profiles.module';
 import { Runner } from '../runner/runner';
 import { RunnerModule } from '../runner/runner.module';
+import { SkillsModule } from '../skills/skills.module';
 import { ArchiveUploadInterceptor } from './archive-upload.interceptor';
 import { Scan } from './entities/scan.entity';
 import { RetentionSweeper } from './retention-sweeper.service';
@@ -20,7 +21,7 @@ export class ScansModule {
   static register(runner?: Runner): DynamicModule {
     return {
       module: ScansModule,
-      imports: [TypeOrmModule.forFeature([Scan]), RunnerModule.register(runner), ArtifactsModule, ProfilesModule, ModelsModule],
+      imports: [TypeOrmModule.forFeature([Scan]), RunnerModule.register(runner), ArtifactsModule, ProfilesModule, ModelsModule, SkillsModule],
       controllers: [ScansController],
       providers: [ScansService, ScanSupervisor, ScanEventsService, RetentionSweeper, ArchiveUploadInterceptor],
     };
