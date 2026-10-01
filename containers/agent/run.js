@@ -19,6 +19,8 @@ const DB = join(process.env.HOME || '/tmp', '.local', 'share', 'opencode', 'open
 const POLL_MS = 2000;
 /** Steps in a row a session may end with no output and no reason before the Attempt is stopped. */
 const STALL_STEPS = 20;
+/** Calls in a row a session may make of one tool with the same input before the Attempt is stopped. */
+const LOOP_CALLS = 30;
 
 const out = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
 
@@ -35,32 +37,47 @@ createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) 
   if (event?.part && event.sessionID) watch(event.sessionID, undefined, event.part);
 });
 
-/** Empty steps in a row, by session; whether the Attempt was stopped for one. */
+/** Empty steps in a row, and the last tool call with how many times in a row, by session. */
 const emptySteps = new Map();
+const lastCall = new Map();
 let stalled = false;
 
 /**
- * Counts the steps a session ends with no output and no finish reason, which is what opencode
- * records when the model answers with an error it does not recognise (seen: a local server out
- * of memory at 344k tokens of context, retried 531 times). At STALL_STEPS in a row, it prints
- * an error event and stops opencode: the Attempt ends, and the supervisor starts another.
+ * Stops a session that goes nowhere, so the Attempt ends and the supervisor starts another:
+ * - STALL_STEPS steps in a row with no output and no finish reason, which is what opencode
+ *   records when the model answers with an error it does not recognise (seen: a local server
+ *   out of memory at 344k tokens of context, retried 531 times);
+ * - LOOP_CALLS calls in a row of the same tool with the same input (seen: a reviewer reading the
+ *   same missing file 581 times; opencode's own doom-loop check only refuses each call).
  */
 function watch(session, title, part) {
   if (part.type === 'step-start') return;
+  if (part.type === 'tool') {
+    const call = `${part.tool}\0${JSON.stringify(part.state?.input ?? {})}`;
+    const last = lastCall.get(session);
+    const n = last?.call === call ? last.n + 1 : 1;
+    lastCall.set(session, { call, n });
+    if (n >= LOOP_CALLS) stop(session, title, 'LoopingModel', `The model called ${part.tool} ${n} times in a row with the same input`);
+  }
   if (part.type !== 'step-finish' || part.reason !== 'unknown' || part.tokens?.output > 0) {
     emptySteps.set(session, 0);
     return;
   }
   const n = (emptySteps.get(session) ?? 0) + 1;
   emptySteps.set(session, n);
-  if (n < STALL_STEPS || stalled) return;
+  if (n >= STALL_STEPS) stop(session, title, 'StalledModel', `The model answered ${n} times in a row with nothing`);
+}
+
+/** Prints an error event naming the session, then stops opencode. */
+function stop(session, title, name, message) {
+  if (stalled) return;
   stalled = true;
   out({
     type: 'error',
     timestamp: Date.now(),
     sessionID: session,
     ...(title && { subagent: title }),
-    error: { name: 'StalledModel', data: { message: `The model answered ${n} times in a row with nothing: the Attempt is stopped` } },
+    error: { name, data: { message: `${message}: the Attempt is stopped` } },
   });
   child.kill('SIGTERM');
   setTimeout(() => child.kill('SIGKILL'), 10_000).unref();

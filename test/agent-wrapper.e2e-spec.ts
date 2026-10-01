@@ -48,8 +48,9 @@ setTimeout(() => {
 `;
 
 /**
- * Stands in for opencode when the model answers with nothing: a subagent session gets step after
- * step with no output and no finish reason, and opencode never exits on its own.
+ * Stands in for opencode when a subagent session goes nowhere, and never exits on its own. With
+ * FAKE_MODE=empty, the model answers with nothing: steps with no output and no finish reason.
+ * With FAKE_MODE=loop, it reads the same missing file again and again.
  */
 const STALLING_OPENCODE = `#!/usr/bin/env node
 const { mkdirSync } = require('node:fs');
@@ -69,7 +70,10 @@ const part = db.prepare('INSERT INTO part (id, session_id, time_updated, data) V
 let n = 0;
 setInterval(() => {
   n++;
-  part.run('s' + n, 'child', Date.now(), JSON.stringify({ type: 'step-finish', reason: 'unknown', tokens: { total: 344580, output: 0 } }));
+  const data = process.env.FAKE_MODE === 'loop'
+    ? { type: 'tool', tool: 'read', state: { status: 'error', input: { filePath: '/skills/x/missing.md' }, error: 'File not found' } }
+    : { type: 'step-finish', reason: 'unknown', tokens: { total: 344580, output: 0 } };
+  part.run('s' + n, 'child', Date.now(), JSON.stringify(data));
 }, 50);
 `;
 
@@ -119,13 +123,16 @@ setInterval(() => {
     expect(usage.sessions).toHaveLength(2);
   });
 
-  it('stops opencode when a session keeps ending its steps with nothing, and exits non-zero', () => {
+  it.each([
+    ['ending its steps with nothing', 'empty', 'StalledModel'],
+    ['calling one tool with the same input', 'loop', 'LoopingModel'],
+  ])('stops opencode when a session keeps %s, and exits non-zero', (_what, mode, name) => {
     const stallDir = mkdtempSync(join(tmpdir(), 'agent-wrapper-stall-'));
     try {
       writeFileSync(join(stallDir, 'opencode'), STALLING_OPENCODE);
       chmodSync(join(stallDir, 'opencode'), 0o755);
       const run = spawnSync(process.execPath, ['--no-warnings', RUN, 'run', '--format', 'json'], {
-        env: { ...process.env, HOME: stallDir, PATH: `${stallDir}${delimiter}${process.env.PATH}` },
+        env: { ...process.env, HOME: stallDir, PATH: `${stallDir}${delimiter}${process.env.PATH}`, FAKE_MODE: mode },
         encoding: 'utf8',
         timeout: 20_000,
       });
@@ -133,7 +140,7 @@ setInterval(() => {
       expect(run.status).not.toBe(0);
       const events = run.stdout.trim().split('\n').map((l) => JSON.parse(l));
       const error = events.find((e) => e.type === 'error');
-      expect(error).toMatchObject({ sessionID: 'child', subagent: 'Stuck (@reviewer subagent)', error: { name: 'StalledModel' } });
+      expect(error).toMatchObject({ sessionID: 'child', subagent: 'Stuck (@reviewer subagent)', error: { name } });
       expect(events[events.length - 1].type).toBe('usage');
     } finally {
       rmSync(stallDir, { recursive: true, force: true });
