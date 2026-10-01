@@ -199,6 +199,8 @@ describe('Model Pool administration', () => {
         const [call] = h.runner.calls;
         expect(call.agentModel).toEqual({ provider: 'local', builtIn: false, name: 'qwen3', baseUrl: `${api.url}/v1`, apiKey: 'local-key-123456' });
         expect(call.egress).toEqual(expect.arrayContaining([new URL(api.url).host, 'api.anthropic.com:443']));
+        // Its own proxy lets through its model's endpoint alone.
+        expect(call.modelEgress).toEqual([new URL(api.url).host]);
       } finally {
         await api.close();
       }

@@ -1,24 +1,25 @@
 import { Logger, OnModuleInit } from '@nestjs/common';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { APP_ROOT } from '../common/app-root';
-import { paths } from '../common/paths';
 import { AppConfig, ModelEntry, PodmanConfig } from '../config/app-config';
 import { endpointOf, isBuiltInKind, KIND_INFO } from '../models/provider-kinds';
-import { agentCommand, agentEnv, agentSecrets, AllowList, IN_CONTAINER } from './agent-spec';
+import { agentCommand, agentEnv, agentSecrets, IN_CONTAINER } from './agent-spec';
 import { AgentModel, AttemptRequest, AttemptResult, Runner } from './runner';
 
-/** Agent containers join only this network: it has no route out of the host. */
-const AGENT_NETWORK = 'ai-scanner-agents';
-/** The egress proxy joins this one too, to reach the model endpoints. */
+/** Every Attempt's proxy joins this network too, to reach its model; agents never do. */
 export const EGRESS_NETWORK = 'ai-scanner-egress';
-const PROXY_CONTAINER = 'ai-scanner-egress-proxy';
 const PROXY_PORT = 3128;
-/** Every agent container carries it, with the Scan id as value. */
+/** How long an Attempt's proxy may take to listen before the Attempt fails. */
+const PROXY_READY_MS = 30_000;
+/** Every container and network of an Attempt carries it, with the Scan id as value. */
 export const SCAN_LABEL = 'ai-scanner.scan';
+/** And this one, with the server instance's id: a server cleans up only its own leftovers. */
+export const INSTANCE_LABEL = 'ai-scanner.instance';
 
 const PROXY_SCRIPT = resolve(APP_ROOT, 'containers', 'egress-proxy', 'proxy.js');
 
@@ -29,49 +30,63 @@ export function modelEndpoint(model: ModelEntry): string {
   return endpointOf(url);
 }
 
+/**
+ * A server instance's id: the same data directory always gives the same one. Two servers, or a
+ * server and the smoke tests, on one host never touch each other's containers.
+ */
+export function instanceOf(dataDir: string): string {
+  return createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 10);
+}
+
 interface RunningAttempt {
   container: string;
+  /** The Attempt's own egress proxy, and the internal network it shares with the agent alone. */
+  proxy: string;
+  network: string;
   stopped: boolean;
 }
 
 /**
  * Runs each Attempt as opencode, headless, in its own ephemeral Podman container (ADR-0003).
  * The workspace is mounted read-only and /output writable; the root filesystem is read-only;
- * the container has no capabilities and reaches the network only through the egress proxy,
- * which lets through the Model Pool's endpoints and nothing else.
+ * the container has no capabilities. Its only network is one of its own, with no route out,
+ * shared with a proxy of its own that lets through its model's endpoint and nothing else.
+ * All three go when the Attempt ends.
  */
 export class PodmanRunner extends Runner implements OnModuleInit {
   private readonly log = new Logger(PodmanRunner.name);
   private readonly podman: PodmanConfig;
-  /** Host directory holding the proxy's allow list. */
-  private readonly egressDir: string;
-  private readonly allowList: AllowList;
+  private readonly instance: string;
   private readonly running = new Map<string, RunningAttempt>();
   private ready?: Promise<void>;
 
   constructor(config: AppConfig) {
     super();
     this.podman = config.podman;
-    this.egressDir = paths.egress(config.dataDir);
-    this.allowList = new AllowList(this.egressDir, (m) => this.log.log(m));
+    this.instance = instanceOf(config.dataDir);
   }
 
   async run(request: AttemptRequest): Promise<AttemptResult> {
-    const attempt: RunningAttempt = { container: `ai-scanner-${request.scanId}-${request.attempt}`, stopped: false };
+    const name = `ais-${this.instance}-${request.scanId}-${request.attempt}`;
+    const attempt: RunningAttempt = { container: name, proxy: `${name}-proxy`, network: `${name}-net`, stopped: false };
     this.running.set(request.scanId, attempt); // before any await: see Runner.stop
     try {
       await this.prepared();
-      // The proxy reads it for every connection: an Attempt sees the Model Pool as it is now.
-      await this.allowList.write(request.egress);
+      await this.exec(['network', 'create', '--internal', ...this.labels(request.scanId), attempt.network]);
+      if (attempt.stopped) return { exitCode: 137 };
+      await this.startProxy(attempt, request);
+      if (attempt.stopped) return { exitCode: 137 };
       const model = request.agentModel;
       await this.withSecrets(model, (envFile) =>
-        this.exec(['create', '--env-file', envFile, ...this.containerArgs(request, attempt.container, model)]),
+        this.exec(['create', '--env-file', envFile, ...this.containerArgs(request, attempt, model)]),
       );
       if (attempt.stopped) return { exitCode: 137 };
       return { exitCode: await this.startAttached(attempt.container, request.transcriptPath) };
     } finally {
       if (this.running.get(request.scanId) === attempt) this.running.delete(request.scanId);
       await this.remove(attempt.container);
+      await this.remove(attempt.proxy);
+      await this.removeNetwork(attempt.network);
     }
   }
 
@@ -95,13 +110,44 @@ export class PodmanRunner extends Runner implements OnModuleInit {
     await this.remove(attempt.container);
   }
 
-  private containerArgs(request: AttemptRequest, name: string, model: AgentModel): string[] {
-    const proxy = `http://${PROXY_CONTAINER}:${PROXY_PORT}`;
-    const env = agentEnv(request, model, proxy);
+  /** What every container and network of an Attempt carries. */
+  private labels(scanId: string): string[] {
+    return ['--label', `${SCAN_LABEL}=${scanId}`, '--label', `${INSTANCE_LABEL}=${this.instance}`];
+  }
+
+  /**
+   * The Attempt's egress proxy, on its network and the egress network, allowing only its model's
+   * endpoint, fixed for its whole life. Resolves once it listens, so the agent's first request
+   * never races it.
+   */
+  private async startProxy(attempt: RunningAttempt, request: AttemptRequest): Promise<void> {
+    await this.exec([
+      'run', '--detach', '--name', attempt.proxy, ...this.labels(request.scanId),
+      '--network', `${attempt.network},${EGRESS_NETWORK}`,
+      '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+      '--pids-limit', '64', '--memory', '128m',
+      '--volume', `${PROXY_SCRIPT}:/proxy.js:ro`,
+      '--env', `ALLOW=${request.modelEgress.join(',')}`,
+      '--env', `PORT=${PROXY_PORT}`,
+      this.podman.proxyImage, 'node', '/proxy.js',
+    ]);
+    for (const deadline = Date.now() + PROXY_READY_MS; ; ) {
+      const logs = await this.exec(['logs', attempt.proxy]).catch(() => '');
+      if (logs.includes('egress proxy on')) return;
+      const state = (await this.exec(['inspect', '--format', '{{.State.Status}}', attempt.proxy]).catch(() => '')).trim();
+      if (state === 'exited' || state === '') throw new Error(`The egress proxy did not start: ${logs.trim().slice(-300)}`);
+      if (Date.now() > deadline) throw new Error('The egress proxy did not start listening in time');
+      if (attempt.stopped) return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  private containerArgs(request: AttemptRequest, attempt: RunningAttempt, model: AgentModel): string[] {
+    const env = agentEnv(request, model, `http://${attempt.proxy}:${PROXY_PORT}`);
     const args = [
-      '--name', name,
-      '--label', `${SCAN_LABEL}=${request.scanId}`,
-      '--network', AGENT_NETWORK,
+      '--name', attempt.container,
+      ...this.labels(request.scanId),
+      '--network', attempt.network,
       '--read-only',
       '--tmpfs', '/tmp:rw,size=512m',
       '--tmpfs', `${IN_CONTAINER.home}:rw,size=512m`,
@@ -143,38 +189,33 @@ export class PodmanRunner extends Runner implements OnModuleInit {
   }
 
   /**
-   * Once per process: removes agent containers a previous process left behind, and (re)creates
-   * the networks and the egress proxy. Its allow list is a file each Attempt rewrites.
+   * Once per process: removes the containers and networks a previous process of this instance
+   * left behind, and creates the egress network the proxies reach out through.
    */
   private async prepare(): Promise<void> {
-    const leftovers = await this.exec(['ps', '-aq', '--filter', `label=${SCAN_LABEL}`]);
+    const mine = `label=${INSTANCE_LABEL}=${this.instance}`;
+    const leftovers = await this.exec(['ps', '-aq', '--filter', mine]);
     for (const id of leftovers.split(/\s+/).filter(Boolean)) await this.remove(id);
+    const networks = await this.exec(['network', 'ls', '-q', '--filter', mine]);
+    for (const id of networks.split(/\s+/).filter(Boolean)) await this.removeNetwork(id);
 
-    if (!(await this.succeeds(['network', 'exists', AGENT_NETWORK]))) {
-      await this.exec(['network', 'create', '--internal', AGENT_NETWORK]);
-    }
     if (!(await this.succeeds(['network', 'exists', EGRESS_NETWORK]))) {
       await this.exec(['network', 'create', EGRESS_NETWORK]);
     }
-    await mkdir(this.egressDir, { recursive: true });
-    await this.remove(PROXY_CONTAINER);
-    await this.exec([
-      'run', '--detach', '--restart', 'always', '--name', PROXY_CONTAINER,
-      '--network', `${EGRESS_NETWORK},${AGENT_NETWORK}`,
-      '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-      '--volume', `${PROXY_SCRIPT}:/proxy.js:ro`,
-      // The directory, not the file: the allow list is replaced by renaming, which a file mount would not see.
-      '--volume', `${this.egressDir}:/egress:ro`,
-      '--env', 'ALLOW_FILE=/egress/allow.txt',
-      '--env', `PORT=${PROXY_PORT}`,
-      this.podman.proxyImage, 'node', '/proxy.js',
-    ]);
   }
 
   private async remove(container: string): Promise<void> {
     await this.exec(['rm', '--force', '--time', '0', '--ignore', container]).catch((e) =>
       this.log.warn(`Could not remove container ${container}: ${e.message}`),
     );
+  }
+
+  private async removeNetwork(network: string): Promise<void> {
+    await this.exec(['network', 'rm', '--force', network]).catch((e) => {
+      if (!/no such network|network not found|unable to find network/i.test(e.message)) {
+        this.log.warn(`Could not remove network ${network}: ${e.message}`);
+      }
+    });
   }
 
   /** Starts the container, waits for it to exit and returns its exit code; its output goes to `logPath`. */

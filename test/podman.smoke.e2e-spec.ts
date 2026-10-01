@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AppConfig, loadConfig, ModelEntry, MINUTE_MS } from '../src/config/app-config';
 import { paths } from '../src/common/paths';
-import { modelEndpoint, PodmanRunner, SCAN_LABEL } from '../src/runner/podman-runner';
+import { INSTANCE_LABEL, instanceOf, modelEndpoint, PodmanRunner, SCAN_LABEL } from '../src/runner/podman-runner';
 import { Harness, makeZip, startApp, testConfig, waitUntil } from './harness';
 import * as pods from './podman';
 import { Finding, findingFile, fixtureFiles, looksItalian, missedPlanted, VULNERABLE_APP } from './real-scan';
@@ -167,19 +167,30 @@ const connect = (authority) => new Promise((done) => {
       }
     });
 
-    it('removes agent containers left by a previous process as soon as it starts', async () => {
-      const orphan = spawnSync(podman!.executable, ['run', '--detach', '--label', `${SCAN_LABEL}=orphan`, podman!.proxyImage, 'sleep', '600'], {
-        encoding: 'utf8',
-      });
-      expect(orphan.status).toBe(0);
-      h = await startApp({ runner: 'configured', config: overrides });
-      await waitUntil(() => containersOf('orphan').length === 0, 'the orphan container to go', MINUTE_MS);
+    it('removes the containers a previous process of the same instance left, and no other', async () => {
+      const dataDir = await mkdtemp(join(tmpdir(), 'ai-scanner-'));
+      const leave = (scan: string, instance: string) =>
+        spawnSync(
+          podman!.executable,
+          ['run', '--detach', '--label', `${SCAN_LABEL}=${scan}`, '--label', `${INSTANCE_LABEL}=${instance}`, podman!.proxyImage, 'sleep', '600'],
+          { encoding: 'utf8' },
+        );
+      expect(leave('orphan', instanceOf(dataDir)).status).toBe(0);
+      expect(leave('someone-else', 'another-instance').status).toBe(0);
+      try {
+        h = await startApp({ dataDir, runner: 'configured', config: overrides });
+        await waitUntil(() => containersOf('orphan').length === 0, 'the orphan container to go', MINUTE_MS);
+        expect(containersOf('someone-else')).toHaveLength(1);
+      } finally {
+        for (const id of containersOf('someone-else')) spawnSync(podman!.executable, ['rm', '--force', '--time', '0', id]);
+      }
     });
 
     it('removes the container of an Attempt stopped at the Attempt timeout', async () => {
       h = await startProbe('setTimeout(() => {}, 10 * 60 * 1000)');
       await h.submit('slow');
-      await waitUntil(() => containersOf('slow').length === 1, 'the agent container', MINUTE_MS);
+      // The agent and its proxy.
+      await waitUntil(() => containersOf('slow').length === 2, 'the agent container and its proxy', MINUTE_MS);
       h.clock.advance(overrides.attemptTimeoutMs!);
       expect((await h.waitForState('slow', 'failed', MINUTE_MS)).failureReason).toMatch(/timed out/);
       expect(containersOf('slow')).toEqual([]);
@@ -188,7 +199,7 @@ const connect = (authority) => new Promise((done) => {
     it('removes the container of an Attempt stopped by DELETE', async () => {
       h = await startProbe('setTimeout(() => {}, 10 * 60 * 1000)');
       await h.submit('del');
-      await waitUntil(() => containersOf('del').length === 1, 'the agent container', MINUTE_MS);
+      await waitUntil(() => containersOf('del').length === 2, 'the agent container and its proxy', MINUTE_MS);
       expect((await h.api.delete('/api/scan/del')).status).toBe(204);
       expect(containersOf('del')).toEqual([]);
     });

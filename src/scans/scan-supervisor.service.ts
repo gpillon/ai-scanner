@@ -265,8 +265,13 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
         // Resolved for every Attempt, so a key the admin changed is used from the next one on.
         let agentModel: AgentModel;
         let egress: string[];
+        let modelEgress: string[];
         try {
-          [agentModel, egress] = await Promise.all([this.pool.agentModel(scan.model), this.pool.endpoints()]);
+          [agentModel, egress, modelEgress] = await Promise.all([
+            this.pool.agentModel(scan.model),
+            this.pool.endpoints(),
+            this.pool.modelEndpoints(scan.model),
+          ]);
         } catch (e) {
           if (this.lettingGo(id)) return;
           return await this.fail(id, `Model ${scan.model} cannot be used: ${(e as Error).message}`);
@@ -287,6 +292,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
             model: scan.model,
             agentModel,
             egress,
+            modelEgress,
           },
           scanTimer,
         );

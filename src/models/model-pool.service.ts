@@ -207,4 +207,22 @@ export class ModelPool implements OnModuleInit {
     }
     return [...endpoints].sort();
   }
+
+  /**
+   * The `host:port` one model is served from: all a proxy of its Scan alone needs to let
+   * through. Empty when its Provider has no usable URL, as `endpoints` leaves it out too.
+   */
+  async modelEndpoints(id: string): Promise<string[]> {
+    const model = await this.models.findOneBy({ id });
+    if (!model) throw new Error(`Model ${id} is not in the Model Pool`);
+    const provider = await this.providers.get(model.providerId);
+    const url = this.providers.baseUrlOf(provider);
+    try {
+      if (!url) throw new Error('no baseUrl');
+      return [endpointOf(url)];
+    } catch (e) {
+      this.log.warn(`Model ${id} has no endpoint its proxy could allow: ${(e as Error).message}`);
+      return [];
+    }
+  }
 }

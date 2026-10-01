@@ -18,8 +18,10 @@ export interface AttemptRequest {
   model: string;
   /** How the agent reaches that model. */
   agentModel: AgentModel;
-  /** Every `host:port` the Model Pool's models are served from: what the agent may reach. */
+  /** Every `host:port` the Model Pool's models are served from: for a proxy all Scans share. */
   egress: string[];
+  /** The `host:port` this Scan's model is served from: all a proxy of this Scan alone lets through. */
+  modelEgress: string[];
 }
 
 /** A Model Pool model as the agent needs it. */
