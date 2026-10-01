@@ -12,6 +12,10 @@ _Avoid_: Job, Run, Analysis, Task
 The zip file of source code the caller uploads to start a Scan.
 _Avoid_: Upload, payload, package, zip
 
+**Source Repository**:
+A Git repository, with an optional branch or tag, that a caller names instead of uploading a Source Archive; the server checks out one commit of it (ADR-0010).
+_Avoid_: Repo source, remote, checkout
+
 **Scan Profile**:
 A named kind of analysis a caller can request, bundling the agent skills and instructions that produce its Report.
 _Avoid_: Skill, scan type, analysis type

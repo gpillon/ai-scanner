@@ -53,6 +53,14 @@ curl -H "Authorization: Bearer $TOKEN" -F file=@code.zip -F profile=security \
      -F skillPacks=java,frontend \
      localhost:3000/api/scan/$ID
 
+# Or scan a Git repository instead of a zip: ref and credentials are optional.
+curl -H "Authorization: Bearer $TOKEN" -X POST -H 'Content-Type: application/json' \
+     -d '{"url":"https://github.com/acme/app.git","token":"<read-only token>"}' \
+     localhost:3000/api/git/refs                                                # {default, branches, tags}
+curl -H "Authorization: Bearer $TOKEN" -F profile=security \
+     -F repoUrl=https://github.com/acme/app.git -F ref=main -F gitToken=<read-only token> \
+     localhost:3000/api/scan/$ID
+
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scans              # every Scan, newest first
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scan/$ID          # queued → running → succeeded | failed
 curl -N -H "Authorization: Bearer $TOKEN" localhost:3000/api/scan/$ID/events  # follow it live (server-sent events)
@@ -61,6 +69,8 @@ curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:3000/api/scan/$ID  # 
 ```
 
 `/events` replays what already happened, then streams `state`, `attempt` and `activity` events until the Scan finishes. An `activity` event is a one-line summary of a tool call, a piece of the agent's text or a step, never the raw transcript. opencode reports each tool call and each block of text once it is complete, so the stream moves in steps rather than token by token. Browsers' `EventSource` cannot send the bearer header, so the UI reads the stream with `fetch`.
+
+A **Git repository** can replace the zip ([ADR-0010](docs/adr/0010-scan-a-git-repository.md)). The server checks out one commit of `ref` (or the default branch) while answering the POST, and keeps it with the Scan. Credentials, for a private repository, are used for that one fetch and never stored. Prefer a read-only token; GitHub and GitLab accept it with any username, `oauth2` by default. Only https is used, symlinks arrive as plain files, Git LFS objects are not fetched, and loopback and link-local hosts are refused. Set `SCANNER_GIT_HOSTS` to restrict the hosts, since any holder of the caller token can make the server fetch from your internal network. The New Scan form offers the same, with a button that lists the repository's branches and tags.
 
 The OpenAPI document is at `/api/openapi.json`, and `/api/docs` renders it. Neither requires the token.
 
@@ -129,6 +139,9 @@ Environment variables, read at startup. `.env.example` has a starting point.
 | `SCANNER_UI_DIR` | `ui/dist/` | Built web UI |
 | `SCANNER_DEFAULT_LANGUAGE` | `en` | Report language when the caller gives none |
 | `SCANNER_MAX_ARCHIVE_MB` | `200` | Upload size limit |
+| `SCANNER_GIT_HOSTS` | any | Hosts Git repositories may come from, comma-separated; `*.example.com` for subdomains |
+| `SCANNER_GIT_TIMEOUT_SECONDS` | `120` | Longest fetch of a Git repository, or listing of its refs |
+| `SCANNER_GIT_ALLOW_HTTP` | `0` | `1` also allows `http://` repositories, never with credentials |
 | `SCANNER_MAX_EXTRACTED_MB` / `SCANNER_MAX_EXTRACTED_FILES` | `1024` / `100000` | Extraction limits |
 | `SCANNER_MAX_INSTRUCTIONS_LENGTH` | `2000` | Characters of caller instructions |
 | `SCANNER_MAX_ATTEMPTS` | `3` | Attempts before a Scan fails |
