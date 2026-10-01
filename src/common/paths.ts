@@ -15,6 +15,8 @@ export const paths = {
   /** A Scan's own copy of the skills it runs with, when it adds Skill Packs to its profile's. */
   scanSkills: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'skills'),
   sourceArchive: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'source.zip'),
+  /** The checked-out tree of a Scan whose source is a Git repository (ADR-0010), in place of the zip. */
+  sourceCheckout: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'checkout'),
   workspace: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'workspace'),
   output: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'output'),
   /** `report.pdf` as rendered by the server, before it is stored as an Artifact. */

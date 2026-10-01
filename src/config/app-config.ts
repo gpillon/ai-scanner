@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { APP_ROOT } from '../common/app-root';
+import type { GitPolicy } from '../scans/git-source';
 import { inCluster } from '../runner/kube-api';
 
 export const APP_CONFIG = Symbol('APP_CONFIG');
@@ -105,6 +106,8 @@ export interface AppConfig {
    * (ADR-0009): a scaled-to-zero model may take many minutes. 0 skips the warm-up.
    */
   warmupTimeoutMs: number;
+  /** How Scans from a Git repository reach it (ADR-0010). */
+  git: GitPolicy;
   /** First pause between warm-up tries; it doubles up to 30 s. */
   warmupRetryMs: number;
   /** Scans running at once; the rest wait `queued`. */
@@ -199,6 +202,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     scanTimeoutMs: positive(env.SCANNER_SCAN_TIMEOUT_MINUTES, 60) * MINUTE_MS,
     concurrency: positiveInt(env.SCANNER_CONCURRENCY, 2),
     warmupTimeoutMs: num(env.SCANNER_WARMUP_TIMEOUT_MINUTES, 30) * MINUTE_MS,
+    git: {
+      timeoutMs: positive(env.SCANNER_GIT_TIMEOUT_SECONDS, 120) * 1000,
+      hosts: list(env.SCANNER_GIT_HOSTS),
+      allowHttp: env.SCANNER_GIT_ALLOW_HTTP === '1',
+      allowLoopback: env.SCANNER_GIT_ALLOW_LOOPBACK === '1',
+    },
     warmupRetryMs: 5000,
   };
 }

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Scan, ScanState } from '../entities/scan.entity';
+import { Scan, ScanSource, ScanState } from '../entities/scan.entity';
 
 export class ScanStatusDto {
   @ApiProperty() id: string;
@@ -18,6 +18,11 @@ export class ScanStatusDto {
     example: [{ id: 'java', skills: [{ name: 'spring-security', hash: '…' }] }],
   })
   skillPacks?: { id: string; skills: { name: string; hash: string }[] }[];
+  @ApiPropertyOptional({
+    description: 'When the code came from a Git repository: its URL (never with credentials), the ref asked for (null: default branch) and the commit',
+    example: { type: 'git', url: 'https://github.com/acme/app.git', ref: 'main', commit: '…' },
+  })
+  source?: ScanSource;
 
   static from(scan: Scan, artifacts: string[]): ScanStatusDto {
     return {
@@ -30,6 +35,7 @@ export class ScanStatusDto {
       createdAt: scan.createdAt,
       startedAt: scan.startedAt,
       finishedAt: scan.finishedAt,
+      ...(scan.source && { source: scan.source }),
       ...(scan.skillPacks?.length && {
         skillPacks: scan.skillPacks.map((p) => ({ id: p.id, skills: p.skills.map(({ name, hash }) => ({ name, hash })) })),
       }),

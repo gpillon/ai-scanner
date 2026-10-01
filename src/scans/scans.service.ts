@@ -1,7 +1,8 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { open, mkdir, rename, rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { Repository } from 'typeorm';
 import { ArtifactStore } from '../artifacts/artifact-store';
 import { Clock } from '../common/clock';
@@ -11,6 +12,7 @@ import { paths } from '../common/paths';
 import { ProfileRegistry } from '../profiles/profile-registry.service';
 import { Scan } from './entities/scan.entity';
 import { SkillPacks } from '../skills/skill-packs.service';
+import { GitSources } from './git-sources.service';
 import { ScanSupervisor } from './scan-supervisor.service';
 
 export const SCAN_ID_PATTERN = /^[a-z0-9-]{1,64}$/;
@@ -25,6 +27,11 @@ export const ARTIFACT_CONTENT_TYPES: Record<string, string> = {
 export interface CreateScanInput {
   id: string;
   archivePath?: string;
+  /** Instead of the archive: a Git repository (ADR-0010). */
+  repoUrl?: string;
+  ref?: string;
+  gitUsername?: string;
+  gitToken?: string;
   profile: string;
   model?: string;
   language?: string;
@@ -56,14 +63,21 @@ export class ScansService {
     private readonly supervisor: ScanSupervisor,
     private readonly clock: Clock,
     private readonly skillPacks: SkillPacks,
+    private readonly git: GitSources,
   ) {}
 
   async create(input: CreateScanInput): Promise<Scan> {
     if (!SCAN_ID_PATTERN.test(input.id)) {
       throw new BadRequestException('Scan id must be 1-64 characters: lowercase letters, digits and dashes');
     }
-    if (!input.archivePath) throw new BadRequestException('Source Archive is required (multipart field "file")');
-    if (!(await looksLikeZip(input.archivePath))) throw new BadRequestException('Source Archive must be a zip file');
+    if (input.archivePath && input.repoUrl) throw new BadRequestException('Give a Source Archive or a repository URL, not both');
+    if (!input.archivePath && !input.repoUrl) {
+      throw new BadRequestException('A Source Archive (multipart field "file") or a repository URL (field "repoUrl") is required');
+    }
+    if (input.archivePath && !(await looksLikeZip(input.archivePath))) throw new BadRequestException('Source Archive must be a zip file');
+    if (!input.repoUrl && (input.ref || input.gitUsername || input.gitToken)) {
+      throw new BadRequestException('ref and the Git credentials go with repoUrl only');
+    }
     if (!this.profiles.get(input.profile)) throw new BadRequestException(`Unknown Scan Profile: ${input.profile}`);
     const model = await this.models.resolve(input.model);
     if (!model) {
@@ -90,8 +104,17 @@ export class ScansService {
       finishedAt: null,
       failureReason: null,
       skillPacks: null,
+      source: null,
     });
     if (await this.scans.existsBy({ id: input.id })) throw new ConflictException(`Scan ${input.id} already exists`);
+
+    // Fetched before the Scan exists: a repository that cannot be read leaves nothing behind.
+    let checkout: string | undefined;
+    if (input.repoUrl) {
+      checkout = join(paths.incoming(this.config.dataDir), `git-${randomUUID()}`);
+      const fetched = await this.git.fetch(input.repoUrl, input.ref, { username: input.gitUsername, token: input.gitToken }, checkout);
+      scan.source = { type: 'git', url: fetched.url, ref: input.ref || null, commit: fetched.commit };
+    }
     // The queue must not start the Scan before its Source Archive is in place; releasing wakes it.
     const release = this.supervisor.hold(input.id);
     try {
@@ -99,6 +122,7 @@ export class ScansService {
       try {
         await this.scans.insert(scan);
       } catch (e) {
+        if (checkout) await rm(checkout, { recursive: true, force: true });
         // Lost a race with a concurrent POST of the same id; anything else is a real failure.
         if ((e as { code?: string }).code?.startsWith('SQLITE_CONSTRAINT')) {
           throw new ConflictException(`Scan ${input.id} already exists`);
@@ -107,9 +131,9 @@ export class ScansService {
       }
 
       try {
-        const target = paths.sourceArchive(this.config.dataDir, input.id);
-        await mkdir(dirname(target), { recursive: true });
-        await rename(input.archivePath, target);
+        await mkdir(paths.scanDir(this.config.dataDir, input.id), { recursive: true });
+        if (checkout) await rename(checkout, paths.sourceCheckout(this.config.dataDir, input.id));
+        else await rename(input.archivePath!, paths.sourceArchive(this.config.dataDir, input.id));
         if (packs.length) {
           // A copy of its own: later changes to the packs or the library do not reach this Scan.
           const profile = this.profiles.get(input.profile)!;
@@ -119,6 +143,7 @@ export class ScansService {
       } catch (e) {
         await this.scans.delete(input.id);
         await rm(paths.scanDir(this.config.dataDir, input.id), { recursive: true, force: true });
+        if (checkout) await rm(checkout, { recursive: true, force: true });
         throw e;
       }
     } finally {

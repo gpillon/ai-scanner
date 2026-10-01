@@ -38,6 +38,30 @@ export class CreateScanDto {
   @IsString({ each: true })
   skillPacks?: string[];
 
+  @ApiPropertyOptional({ description: 'Instead of `file`: the https URL of a Git repository to scan (ADR-0010). Never put credentials in it.' })
+  @emptyToUndefined()
+  @IsOptional()
+  @IsString()
+  repoUrl?: string;
+
+  @ApiPropertyOptional({ description: 'With repoUrl: the branch or tag. Defaults to the default branch. See POST /api/git/refs.' })
+  @emptyToUndefined()
+  @IsOptional()
+  @IsString()
+  ref?: string;
+
+  @ApiPropertyOptional({ description: 'With repoUrl, for a private repository: the username; defaults to `oauth2`.' })
+  @emptyToUndefined()
+  @IsOptional()
+  @IsString()
+  gitUsername?: string;
+
+  @ApiPropertyOptional({ description: 'With repoUrl, for a private repository: a token or password. Used for this one fetch, never stored.' })
+  @emptyToUndefined()
+  @IsOptional()
+  @IsString()
+  gitToken?: string;
+
   @ApiPropertyOptional({ description: 'Short free-text instructions to steer the analysis (length-limited).' })
   @emptyToUndefined()
   @IsOptional()

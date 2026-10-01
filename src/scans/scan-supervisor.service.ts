@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nest
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
 import { appendFileSync, createReadStream } from 'node:fs';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Repository } from 'typeorm';
 import { ArtifactStore } from '../artifacts/artifact-store';
@@ -247,10 +247,15 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
     await mkdir(workspaceDir, { recursive: true });
     await mkdir(outputDir, { recursive: true });
     try {
-      await extractSourceArchive(paths.sourceArchive(this.config.dataDir, id), workspaceDir, {
-        maxBytes: this.config.maxExtractedBytes,
-        maxFiles: this.config.maxExtractedFiles,
-      });
+      if (scan.source) {
+        // Checked out and checked when the Scan was submitted (ADR-0010): copied, kept for a restart.
+        await cp(paths.sourceCheckout(this.config.dataDir, id), workspaceDir, { recursive: true });
+      } else {
+        await extractSourceArchive(paths.sourceArchive(this.config.dataDir, id), workspaceDir, {
+          maxBytes: this.config.maxExtractedBytes,
+          maxFiles: this.config.maxExtractedFiles,
+        });
+      }
     } catch (e) {
       if (!(e instanceof InvalidSourceArchiveError)) throw e;
       if (this.lettingGo(id)) return;
@@ -400,7 +405,12 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
           startedAt: scan.startedAt ?? scan.createdAt,
           instructions: scan.instructions,
           attempts: (await this.scans.findOneBy({ id }))?.attempts ?? 1,
-          archiveSha256: await sha256(paths.sourceArchive(this.config.dataDir, id)),
+          ...(scan.source
+            ? {
+                sourceLabel: 'Git repository',
+                sourceValue: `${scan.source.url} @ ${scan.source.ref ?? 'default branch'} · ${scan.source.commit}`,
+              }
+            : { sourceLabel: 'Source Archive SHA-256', sourceValue: await sha256(paths.sourceArchive(this.config.dataDir, id)) }),
           files: await countFiles(workspaceDir),
           workspaceDir,
         });
@@ -434,6 +444,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
    */
   private async discardSource(id: string): Promise<void> {
     await rm(paths.sourceArchive(this.config.dataDir, id), { force: true });
+    await rm(paths.sourceCheckout(this.config.dataDir, id), { recursive: true, force: true });
     await rm(paths.workspace(this.config.dataDir, id), { recursive: true, force: true });
   }
 }

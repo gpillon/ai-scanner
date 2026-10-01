@@ -273,6 +273,8 @@ export function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}):
     concurrency: 2,
     // No model answers in these tests: the warm-up has its own (test/warmup.e2e-spec.ts).
     warmupTimeoutMs: 0,
+    // The tests' Git server runs on 127.0.0.1, over http.
+    git: { timeoutMs: 60_000, hosts: [], allowHttp: true, allowLoopback: true },
     warmupRetryMs: 10,
     ...overrides,
   };

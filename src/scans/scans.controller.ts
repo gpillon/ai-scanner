@@ -49,9 +49,13 @@ export class ScansController {
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['file', 'profile'],
+      required: ['profile'],
       properties: {
-        file: { type: 'string', format: 'binary', description: 'Source Archive (zip)' },
+        file: { type: 'string', format: 'binary', description: 'Source Archive (zip); or give repoUrl instead' },
+        repoUrl: { type: 'string', description: 'https URL of a Git repository, instead of file' },
+        ref: { type: 'string', description: 'With repoUrl: branch or tag; the default branch otherwise' },
+        gitUsername: { type: 'string' },
+        gitToken: { type: 'string', description: 'For a private repository; never stored' },
         profile: { type: 'string' },
         model: { type: 'string' },
         language: { type: 'string' },

@@ -12,6 +12,7 @@ describe('access and discovery', () => {
       ['GET', '/api/profiles'],
       ['GET', '/api/models'],
       ['GET', '/api/scans'],
+      ['POST', '/api/git/refs'],
       ['GET', '/api/me'],
       ['GET', '/api/admin/providers'],
       ['POST', '/api/admin/models'],
@@ -64,6 +65,7 @@ describe('access and discovery', () => {
     expect(operations.sort()).toEqual(
       [
         'GET /api/scans',
+        'POST /api/git/refs',
         'GET /api/me',
         'GET /api/admin/provider-kinds',
         'GET /api/admin/providers',

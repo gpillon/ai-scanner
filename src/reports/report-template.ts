@@ -45,7 +45,10 @@ export interface ReportContext {
   startedAt: string;
   instructions: string | null;
   attempts: number;
-  archiveSha256: string;
+  /** Where the code came from: `Source Archive SHA-256` or `Git repository` (ADR-0010)... */
+  sourceLabel: string;
+  /** ...and the archive's hash, or the repository URL, ref and commit. */
+  sourceValue: string;
   /** Files in the extracted Source Archive. */
   files: number;
   /** The extracted Source Archive, where code excerpts are read from. */

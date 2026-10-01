@@ -270,7 +270,7 @@
     ("Scan Profile", scan.profile),
     ("Model", raw(scan.model)),
     ("Report language", scan.language),
-    ("Source Archive", [#scan.files files · SHA-256 #linebreak() #text(size: 7.5pt, raw(scan.archiveSha256))]),
+    ("Source", [#scan.files files · #scan.sourceLabel #linebreak() #text(size: 7.5pt, raw(scan.sourceValue))]),
     ("Attempts", str(scan.attempts)),
   ))
 
