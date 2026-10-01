@@ -33,6 +33,8 @@ Sign in with the token from `SCANNER_TOKEN` in `.env`. With `RUNNER=fake`, Scans
 | `make test-smoke` | Also run the Podman smoke tests (real containers) |
 | `make image` / `make agent-image` | Build the service image / the agent image |
 | `make run-image` | Run the service image with `.env`, data in a volume |
+| `make chart-lint` | Lint the Helm chart and render it for Kubernetes and OpenShift |
+| `make release VERSION=X.Y.Z` / `make release-push VERSION=X.Y.Z` | Set every version, commit and tag `vX.Y.Z` / push them (see [Releases](#releases)) |
 
 `RUNNER`, `PORT`, `CONTAINER_ENGINE` (default `podman`), `IMAGE` and `TAG` can be overridden on the command line, e.g. `make image CONTAINER_ENGINE=docker TAG=test`.
 
@@ -111,12 +113,17 @@ Environment variables, read at startup. `.env.example` has a starting point.
 | `SCANNER_SECRET_KEY` | — | Encrypts stored Provider API keys (16+ characters). Without it, keys cannot be stored |
 | `SCANNER_MODELS` | — | Seeds the Model Pool on the first start only, JSON: `[{"id","provider","baseUrl?","apiKeyEnv?"}]` |
 | `SCANNER_DEFAULT_MODEL` | first model | Default Model of that seed |
-| `SCANNER_RUNNER` | `podman` | `podman` runs the agent; `fake` writes a placeholder Report |
+| `SCANNER_RUNNER` | `auto` | `kubernetes` inside a pod, `podman` elsewhere; or set one of them, or `fake` (a placeholder Report) |
 | `SCANNER_AGENT_IMAGE` | `localhost/ai-scanner-agent:latest` | Image run for each Attempt |
 | `SCANNER_EGRESS_PROXY_IMAGE` | `docker.io/library/node:22-alpine` | Image running the egress proxy |
 | `SCANNER_AGENT_ENV` | — | Comma-separated server variables passed to the agent (API keys) |
 | `SCANNER_AGENT_MEMORY` | `4g` | Memory limit per agent container |
 | `SCANNER_PODMAN` | `podman` | Podman executable |
+| `SCANNER_K8S_DATA_CLAIM` | discovered | Kubernetes: the claim holding the data directory |
+| `SCANNER_K8S_EGRESS_PROXY` | discovered | Kubernetes: the egress proxy URL agent pods use |
+| `SCANNER_K8S_COLOCATE` | `auto` | Kubernetes: pin agent pods to the server's node (`auto`: unless the claim is ReadWriteMany) |
+| `SCANNER_K8S_AGENT_SERVICE_ACCOUNT` | namespace default | Kubernetes: ServiceAccount of agent pods |
+| `SCANNER_K8S_AGENT_MEMORY` / `SCANNER_K8S_AGENT_CPU` | `4Gi` / `2` | Kubernetes: limits per agent pod |
 | `SCANNER_DATA_DIR` | `data` (`/data` in the image) | Database, Source Archives, Artifacts |
 | `SCANNER_PROFILES_DIR` | `profiles/` | Scan Profiles |
 | `SCANNER_UI_DIR` | `ui/dist/` | Built web UI |
@@ -132,7 +139,7 @@ Environment variables, read at startup. `.env.example` has a starting point.
 
 ## Isolation
 
-Each Attempt runs opencode in its own ephemeral Podman container ([ADR-0003](docs/adr/0003-isolated-container-per-scan.md)). The container has a read-only root filesystem and no capabilities. The code is mounted read-only, the agent has no shell, and the only network route out is an egress proxy that lets through the Model Pool's endpoints and nothing else. Source Archives are extracted with size and file-count limits and with path-traversal rejection.
+Each Attempt runs opencode in its own ephemeral Podman container ([ADR-0003](docs/adr/0003-isolated-container-per-scan.md)), or its own pod on Kubernetes ([ADR-0007](docs/adr/0007-kubernetes-runner.md)). The container has a read-only root filesystem and no capabilities. The code is mounted read-only, the agent has no shell, and the only network route out is an egress proxy that lets through the Model Pool's endpoints and nothing else. Source Archives are extracted with size and file-count limits and with path-traversal rejection.
 
 ## Container images
 
@@ -148,7 +155,18 @@ podman run --rm -p 3000:3000 -v ai-scanner-data:/data \
 
 [`containers/agent/Containerfile`](containers/agent/Containerfile) builds the agent image the Podman Runner starts for each Attempt.
 
-> **Limit:** the service image does not run real Scans yet. The Podman Runner starts sibling containers through a `podman` executable, and it bind-mounts paths from its own filesystem (the Scan workspace, the output directory, the proxy script). Inside the service container there is no `podman`, and those paths would not exist on the host. For now, use the image with `SCANNER_RUNNER=fake`, or run the service directly on the host. A Kubernetes/OpenShift Runner is the planned way to run Scans from a container (ADR-0003).
+The service image runs real Scans on Kubernetes and OpenShift, where it starts one agent pod per Attempt: see [Kubernetes and OpenShift](#kubernetes-and-openshift). Under Podman it cannot start sibling containers, so there run it with `SCANNER_RUNNER=fake`, or run the service directly on the host.
+
+## Kubernetes and OpenShift
+
+The Helm chart in [`charts/ai-scanner`](charts/ai-scanner/README.md) installs the service. It detects OpenShift and adapts: UIDs come from the restricted SCC, and `expose.enabled` creates a Route there and an Ingress elsewhere.
+
+```sh
+helm repo add ai-scanner https://gpillon.github.io/ai-scanner
+helm install scanner ai-scanner/ai-scanner -n ai-scanner --create-namespace
+```
+
+The server runs the Kubernetes Runner ([ADR-0007](docs/adr/0007-kubernetes-runner.md)). Each Attempt is a hardened pod in the same namespace, mounting the server's data volume, and it reaches the models only through the egress proxy, a sidecar of the server, under NetworkPolicies. The server discovers its own setup from its pod: data claim, node, agent image, pull secrets and egress Service.
 
 ## CI
 
@@ -158,6 +176,24 @@ podman run --rm -p 3000:3000 -v ai-scanner-data:/data \
 2. It builds `ghcr.io/<owner>/ai-scanner` and `ghcr.io/<owner>/ai-scanner-agent`, and pushes both to GHCR, except on pull requests.
 
 Tags: branch name, `sha-<short>`, `latest` on the default branch, and `X.Y.Z` / `X.Y` for `vX.Y.Z` git tags. The workflow logs in to GHCR with `GITHUB_TOKEN`, so the only setup is making the packages public in GitHub if they should be.
+
+[`.github/workflows/helm-release.yml`](.github/workflows/helm-release.yml) lints the Helm chart on every change to it, and publishes it on release tags.
+
+### Releases
+
+A release is a `vX.Y.Z` tag on `main`:
+
+```sh
+make release VERSION=0.2.0       # sets the chart, appVersion and package versions, commits, tags
+make release-push VERSION=0.2.0  # pushes main and the tag
+```
+
+On the tag:
+
+- CI pushes both images as `0.2.0`.
+- The chart `0.2.0` is added to the `gh-pages` branch, and its entry is merged into the same `index.yaml`. The Helm repository at `https://<owner>.github.io/<repo>` keeps every version released, and a published version is never overwritten.
+
+One-time setup: create the `gh-pages` branch and enable GitHub Pages from it.
 
 ## Tests
 
@@ -174,7 +210,7 @@ src/          NestJS backend, one folder per feature module
   config/     environment variables to AppConfig
   common/     Clock, on-disk paths, app root
   scans/      Scans: controller, service, supervisor, retention, upload, DTOs, entity
-  runner/     Runner port, Podman and fake adapters
+  runner/     Runner port, Podman, Kubernetes and fake adapters, the agent spec they share
   profiles/   Scan Profiles and GET /api/profiles
   models/     Model Pool and Providers (database), discovery, GET /api/models, /api/admin
   artifacts/  Artifact store
@@ -182,6 +218,7 @@ src/          NestJS backend, one folder per feature module
 ui/           Web UI (Vite + React + PatternFly)
 profiles/     Scan Profiles: prompt, skills, Report Template
 containers/   Agent image and egress proxy
+charts/       Helm chart for Kubernetes and OpenShift
 test/         e2e suite and fixtures
 docs/adr/     Architecture decision records
 ```
