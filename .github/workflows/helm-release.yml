@@ -1,14 +1,18 @@
 name: Helm chart
 
-# Lints the chart on every change, and publishes it to the gh-pages branch (a Helm repository
-# served by GitHub Pages) when its version changes on main. chart-releaser skips versions it
-# already released, so bump charts/ai-scanner/Chart.yaml `version` to publish.
-#
-# One-time setup: create an empty `gh-pages` branch, and enable Pages from it.
+# Lints the chart on every change to it, and publishes it on every release tag (`vX.Y.Z`, see
+# `make release`) to the gh-pages branch, served by GitHub Pages as a Helm repository:
 #   helm repo add ai-scanner https://<owner>.github.io/<repo>
+#
+# The repository is incremental: each release adds its package next to the earlier ones and
+# merges its entry into the same index.yaml, so the index lists every version ever released.
+# A version already published is never overwritten.
+#
+# One-time setup: create the `gh-pages` branch (empty is fine) and enable Pages from it.
 
 on:
   push:
+    tags: ['v*']
     branches: [main]
     paths:
       - charts/**
@@ -20,11 +24,15 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: helm-${{ github.ref }}
-  cancel-in-progress: true
+  # One publication at a time: each one rewrites gh-pages' index.yaml.
+  group: helm-${{ startsWith(github.ref, 'refs/tags/') && 'publish' || github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
+
+env:
+  HELM_VERSION: v3.16.4
 
 jobs:
   lint:
@@ -35,7 +43,7 @@ jobs:
 
       - uses: azure/setup-helm@v4
         with:
-          version: v3.16.4
+          version: ${{ env.HELM_VERSION }}
 
       - name: Lint
         run: helm lint --strict charts/ai-scanner
@@ -56,29 +64,76 @@ jobs:
           ./kubeconform -strict -summary -kubernetes-version 1.30.0 /tmp/kubernetes.yaml
           ./kubeconform -strict -summary -kubernetes-version 1.30.0 -skip Route /tmp/openshift.yaml
 
-  release:
+  publish:
     name: Publish to GitHub Pages
     needs: lint
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Configure git
-        run: |
-          git config user.name "$GITHUB_ACTOR"
-          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
       - uses: azure/setup-helm@v4
         with:
-          version: v3.16.4
+          version: ${{ env.HELM_VERSION }}
 
-      - uses: helm/chart-releaser-action@v1.7.0
+      # The chart, its appVersion and the images CI pushes for this tag all carry the same version.
+      - name: Check the version
+        id: version
+        run: |
+          version="${TAG#v}"
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "::error::$TAG is not vX.Y.Z"; exit 1; }
+          chart=$(sed -n 's/^version: *//p' charts/ai-scanner/Chart.yaml | tr -d '"')
+          app=$(sed -n 's/^appVersion: *//p' charts/ai-scanner/Chart.yaml | tr -d '"')
+          if [ "$chart" != "$version" ] || [ "$app" != "$version" ]; then
+            echo "::error::Chart.yaml has version $chart and appVersion $app, but the tag is $TAG: release with 'make release VERSION=$version'"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        run: helm package charts/ai-scanner --destination dist-chart
+
+      - uses: actions/checkout@v4
         with:
-          charts_dir: charts
-        env:
-          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ref: gh-pages
+          path: pages
+
+      # Adds this version next to the earlier ones and merges its entry into the existing index.
+      - name: Add to the Helm repository
+        run: |
+          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          url="https://${owner}.github.io/${{ github.event.repository.name }}"
+          pkg="ai-scanner-${{ steps.version.outputs.version }}.tgz"
+          mkdir -p pages/charts
+          if [ -e "pages/charts/$pkg" ]; then
+            echo "::error::$pkg is already published: a release is never overwritten"
+            exit 1
+          fi
+          cp "dist-chart/$pkg" pages/charts/
+          merge=""
+          [ -f pages/index.yaml ] && merge="--merge pages/index.yaml"
+          helm repo index dist-chart --url "$url/charts" $merge
+          cp dist-chart/index.yaml pages/index.yaml
+          touch pages/.nojekyll
+          cd pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add charts index.yaml .nojekyll
+          git commit -m "Publish the ai-scanner chart ${{ steps.version.outputs.version }}"
+          git push origin gh-pages
+          grep -A2 '^  ai-scanner:' index.yaml | head -3
+          echo "Versions in the index: $(grep -c '^  - ' index.yaml || true)"
+
+      - name: Attach the chart to the GitHub release
+        run: |
+          pkg="dist-chart/ai-scanner-${{ steps.version.outputs.version }}.tgz"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$pkg" --clobber
+          else
+            gh release create "$TAG" "$pkg" --verify-tag --generate-notes --title "$TAG"
+          fi

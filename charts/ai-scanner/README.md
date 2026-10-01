@@ -76,6 +76,16 @@ See [values.yaml](values.yaml). The main ones:
 
 ## Release
 
-`.github/workflows/helm-release.yml` lints the chart, renders it for Kubernetes and for
-OpenShift, and validates the output with kubeconform. On `main` it publishes every new
-chart `version` to the `gh-pages` branch with chart-releaser.
+A release is a `vX.Y.Z` tag on `main`:
+
+```sh
+make release VERSION=0.2.0       # sets the chart, appVersion and package versions, commits, tags
+make release-push VERSION=0.2.0  # pushes main and the tag
+```
+
+On the tag, CI builds and pushes both images as `0.2.0`. `.github/workflows/helm-release.yml`
+then lints the chart, renders it for Kubernetes and for OpenShift, and validates both with
+kubeconform. Finally it adds `ai-scanner-0.2.0.tgz` to the `gh-pages` branch and merges its
+entry into the existing `index.yaml`: one repository URL lists every version released so
+far, and a published version is never overwritten. It also attaches the package to the
+GitHub release. Changes to the chart outside a tag are linted, never published.

@@ -14,7 +14,7 @@ ENV_RUN = $(if $(RUNNER),SCANNER_RUNNER=$(RUNNER) )PORT=$(PORT)
 
 .DEFAULT_GOAL := help
 .PHONY: help install dev dev-backend debug-backend dev-ui build build-backend build-ui start typecheck test test-smoke \
-        image agent-image images run-image clean
+        image agent-image images run-image clean release release-push chart-lint
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -82,3 +82,38 @@ run-image: .env ## Run the service image, data in the ai-scanner-data volume
 
 clean: ## Remove build output (not data/)
 	rm -rf dist ui/dist
+
+## --- Release ---
+# A release is a vX.Y.Z tag on main. Pushing it makes CI build and push both images as X.Y.Z,
+# and publish the Helm chart X.Y.Z (appVersion X.Y.Z) to the gh-pages Helm repository.
+
+VERSION ?=
+SEMVER  := ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$
+
+release: ## Set every version to VERSION (X.Y.Z), commit and tag vVERSION locally
+	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=X.Y.Z"; exit 1; }
+	@echo "$(VERSION)" | grep -Eq '$(SEMVER)' || { echo "VERSION must be X.Y.Z or X.Y.Z-pre: $(VERSION)"; exit 1; }
+	@test "$$(git rev-parse --abbrev-ref HEAD)" = main || { echo "Release from main"; exit 1; }
+	@git diff --quiet && git diff --cached --quiet || { echo "Commit or stash your changes first"; exit 1; }
+	@! git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null || { echo "Tag v$(VERSION) already exists"; exit 1; }
+	sed -i.bak -E 's/^version: .*/version: $(VERSION)/; s/^appVersion: .*/appVersion: "$(VERSION)"/' charts/ai-scanner/Chart.yaml
+	rm -f charts/ai-scanner/Chart.yaml.bak
+	npm version --no-git-tag-version --allow-same-version $(VERSION) >/dev/null
+	cd ui && npm version --no-git-tag-version --allow-same-version $(VERSION) >/dev/null
+	@if command -v helm >/dev/null; then helm lint --strict charts/ai-scanner; else echo "helm not found: CI lints the chart"; fi
+	git add charts/ai-scanner/Chart.yaml package.json package-lock.json ui/package.json ui/package-lock.json
+	@git diff --cached --quiet || git commit -m "Release v$(VERSION)"
+	git tag -a "v$(VERSION)" -m "ai-scanner $(VERSION)"
+	@echo "Tagged v$(VERSION). Publish it with: make release-push VERSION=$(VERSION)"
+
+release-push: ## Push main and the vVERSION tag: CI builds the images and publishes the chart
+	@test -n "$(VERSION)" || { echo "Usage: make release-push VERSION=X.Y.Z"; exit 1; }
+	@git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null || { echo "No tag v$(VERSION): run make release VERSION=$(VERSION) first"; exit 1; }
+	git push origin main "v$(VERSION)"
+
+chart-lint: ## Lint the Helm chart, and render it for Kubernetes and for OpenShift
+	helm lint --strict charts/ai-scanner
+	helm template t charts/ai-scanner --set expose.enabled=true --set expose.host=scanner.example.com >/dev/null
+	helm template t charts/ai-scanner --set expose.enabled=true \
+		--api-versions security.openshift.io/v1 --api-versions route.openshift.io/v1 >/dev/null
+	@echo "Chart OK"
