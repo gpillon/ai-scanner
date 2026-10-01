@@ -7,7 +7,13 @@ export const paths = {
   artifacts: (dataDir: string) => join(dataDir, 'artifacts'),
   /** Mounted read-only into the egress proxy: `allow.txt` is its allow list, read at runtime. */
   egress: (dataDir: string) => join(dataDir, 'egress'),
+  /** The Skill Library: one `<skill>/SKILL.md` directory per imported skill (ADR-0008). */
+  skills: (dataDir: string) => join(dataDir, 'skills'),
+  /** Imports in progress, on the same volume as the library so they move into place by renaming. */
+  skillImports: (dataDir: string) => join(dataDir, 'skill-imports'),
   scanDir: (dataDir: string, id: string) => join(dataDir, 'scans', id),
+  /** A Scan's own copy of the skills it runs with, when it adds Skill Packs to its profile's. */
+  scanSkills: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'skills'),
   sourceArchive: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'source.zip'),
   workspace: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'workspace'),
   output: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'output'),
