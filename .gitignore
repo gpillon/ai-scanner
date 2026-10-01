@@ -75,3 +75,6 @@ docker-compose.override.yml
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# --- Private Profiles ---
+profiles/lyra/
