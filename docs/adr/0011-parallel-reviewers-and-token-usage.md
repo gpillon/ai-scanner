@@ -4,14 +4,20 @@
 
 **Token usage.** opencode's JSON event stream reports the main session's tokens only. Its own database, in the agent's `HOME`, holds every session's totals, subagents included. `HOME` is new for each Attempt, so the sum over that database is the Attempt's usage. The agent container runs `containers/agent/usage.js` once opencode exits, keeping opencode's exit code. The script prints that sum as the transcript's last line, `{"type":"usage", ...}`. The supervisor adds each Attempt's usage to the Scan's. `GET /api/scan/<id>` and the UI show it, and the activity stream shows each Attempt's total.
 
+**Subagent activity.** opencode's JSON event stream shows nothing of a reviewer until its `task` call returns, so a Scan's activity went silent for as long as its reviewers ran. The agent container's command is `containers/agent/run.js`: it runs opencode, forwards its stream line by line, and polls opencode's database every 2 seconds for the parts of subagent sessions. It prints each finished part once, as the event opencode itself prints for the main session (`tool_use`, `text`, `step_finish`), with a `subagent` field: the session's title. The same poll also reads the main session's `task` calls, one per subagent: it prints a `subagent` line when a call starts and when it ends, each carrying an `active` count of how many subagents are still running, so the activity shows a reviewer as soon as it starts, not only when it returns. Once opencode exits it prints the usage line (`usage.js`) and exits with opencode's exit code. The activity stream gives each such row the subagent's task description, and the UI tags the row with it and counts the active subagents beside the Live label. The script is the only writer of the container's output: a second process writing to it could split opencode's lines, since the Podman Runner reads stdout and stderr as one stream.
+
 ## Consequences
 
 - Usage is about running the service, not about the code reviewed: it is never in the Report or the Findings.
 - A transcript without a usage line adds nothing: an agent image older than the server, or an Attempt killed before opencode exits (a timeout, a stopped Scan). Usage is then a lower bound.
 - Reviewers use the Scan's model. Parallel reviewers raise the load on the model at once, though rarely the total tokens: each reads only its part.
 - The usage script depends on opencode's database schema (`session` table, `tokens_*` columns). An opencode upgrade that changes it yields no usage line, never a failed Attempt.
+- `run.js` depends on the same schema (`part` table, `session.parent_id`). A schema it does not know yields no subagent rows, never a failed Attempt.
+- The server's command names `run.js`: an agent image older than the server lacks it, and its Attempts fail. Server and agent image are released together.
+- A subagent's rows reach the activity up to 2 seconds late, and may interleave with the main agent's out of time order.
 
 ## Considered Options
 
 - Summing the stream's `step_finish` events was rejected: it misses every subagent.
 - `opencode stats` was rejected: it prints rounded, formatted figures ("1.7K").
+- For subagent activity, a second process in the container printing the database's parts was rejected: its lines could land inside opencode's. Running opencode as a server and following its event API was rejected as more moving parts than a poll of the database it already writes.

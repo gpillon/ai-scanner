@@ -94,7 +94,8 @@ export class ScansController {
     description:
       'Replays what already happened, then follows the Scan until it has finished. Events: `state` (a Scan ' +
       'status, whenever it changes), `attempt` ({attempt}, when an Attempt starts), `activity` (what the agent ' +
-      'does: {attempt, at, kind, tool?, ok?, text}) and `deleted`. Activity is a summary of the agent transcript, ' +
+      'does: {attempt, at, kind, subagent?, active?, tool?, ok?, text}; `subagent` names the subagent that did it, ' +
+      'and `active` how many subagents are still running after a `subagent`-kind line) and `deleted`. Activity is a summary of the agent transcript, ' +
       'never the transcript itself.',
   })
   @ApiProduces('text/event-stream')

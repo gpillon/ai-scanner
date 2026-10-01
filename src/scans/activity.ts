@@ -9,10 +9,14 @@ export interface Activity {
   attempt: number;
   /** ISO time the agent did it, or the time the server read it when the agent gave none. */
   at: string;
-  kind: 'tool' | 'text' | 'step' | 'error' | 'log';
+  kind: 'tool' | 'text' | 'step' | 'error' | 'log' | 'subagent';
+  /** The subagent that did it (its task's description), or absent for the main agent. */
+  subagent?: string;
+  /** For `subagent`: how many subagents are active, after this event. */
+  active?: number;
   /** For `tool`: read, grep, glob, list, skill, write, todowrite... */
   tool?: string;
-  /** For `tool`: false when the tool call failed. */
+  /** For `tool`: false when the tool call failed; for a finished `subagent`: false when it failed. */
   ok?: boolean;
   text: string;
 }
@@ -53,6 +57,8 @@ function toolLine(tool: string, input: Record<string, unknown>): string {
     }
     case 'skill':
       return str(input.name);
+    case 'task':
+      return str(input.description);
     case 'todowrite':
       return Array.isArray(input.todos) ? `${input.todos.length} to-dos` : '';
     default:
@@ -67,12 +73,35 @@ function toolLine(tool: string, input: Record<string, unknown>): string {
 export function summarise(line: string, attempt: number, now: () => Date): Activity | undefined {
   const trimmed = line.trim();
   if (!trimmed) return undefined;
-  let event: { type?: string; timestamp?: number; part?: Record<string, any>; error?: unknown };
+  let event: AgentEvent;
   try {
     event = JSON.parse(trimmed);
   } catch {
     return { attempt, at: now().toISOString(), kind: 'log', text: clip(trimmed, MAX_TEXT) };
   }
+  const activity = describe(event, trimmed, attempt, now);
+  // containers/agent/run.js adds the events of subagent sessions, titled "<description> (@<agent> subagent)".
+  if (activity && typeof event.subagent === 'string') {
+    activity.subagent = clip(event.subagent.replace(/\s*\(@[^)]*\)\s*$/, ''), MAX_ARG);
+  }
+  return activity;
+}
+
+/** One JSON line of the transcript: an opencode event, or the agent container's usage line. */
+interface AgentEvent {
+  type?: string;
+  timestamp?: number;
+  part?: Record<string, any>;
+  error?: unknown;
+  /** Set on a subagent session's event, by containers/agent/run.js: the session's title. */
+  subagent?: unknown;
+  /** Set on a subagent started/finished line, by containers/agent/run.js. */
+  state?: string;
+  active?: number;
+  ok?: boolean;
+}
+
+function describe(event: AgentEvent, line: string, attempt: number, now: () => Date): Activity | undefined {
   const at = new Date(typeof event.timestamp === 'number' ? event.timestamp : now().getTime()).toISOString();
   const part = event.part ?? {};
   switch (event.type) {
@@ -94,7 +123,7 @@ export function summarise(line: string, attempt: number, now: () => Date): Activ
     }
     case 'usage': {
       // The agent container's last line (containers/agent/usage.js): the Attempt's whole usage.
-      const u = parseUsageLine(trimmed);
+      const u = parseUsageLine(line);
       if (!u) return undefined;
       const n = (v: number) => v.toLocaleString('en-US');
       const sessions = u.sessions > 1 ? `, ${u.sessions} sessions (${u.sessions - 1} subagent${u.sessions > 2 ? 's' : ''})` : '';
@@ -109,6 +138,20 @@ export function summarise(line: string, attempt: number, now: () => Date): Activ
       const e = event.error as { name?: string; data?: { message?: string } } | undefined;
       const message = e?.data?.message ?? e?.name ?? 'error';
       return { attempt, at, kind: 'error', text: clip(String(message), MAX_TEXT) };
+    }
+    case 'subagent': {
+      // containers/agent/run.js's started/finished line for a `task` call: the subagent's name,
+      // never its prompt or output. `active` is how many are still running, after this event.
+      const name = typeof event.subagent === 'string' ? event.subagent : '';
+      const active = typeof event.active === 'number' ? event.active : 0;
+      if (event.state === 'started') {
+        return { attempt, at, kind: 'subagent', subagent: name, active, text: `started (${active} active)` };
+      }
+      if (event.state === 'finished') {
+        const ok = event.ok === true;
+        return { attempt, at, kind: 'subagent', subagent: name, active, ok, text: `${ok ? 'finished' : 'failed'} (${active} active)` };
+      }
+      return undefined;
     }
     default:
       return undefined;

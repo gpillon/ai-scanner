@@ -56,6 +56,58 @@ describe('Scan activity', () => {
       expect(summarise('podman: something odd', 1, NOW)).toMatchObject({ kind: 'log', text: 'podman: something odd' });
       expect(summarise(line('step_start', {}), 1, NOW)).toBeUndefined();
     });
+
+    it('names the subagent that did it, by its task description', () => {
+      const event = (subagent: unknown) =>
+        JSON.stringify({ type: 'tool_use', timestamp: 1_767_225_600_000, subagent, part: { tool: 'grep', state: { status: 'completed', input: { pattern: 'exec' } } } });
+      expect(summarise(event('Injection and data flow (@reviewer subagent)'), 1, NOW)).toMatchObject({
+        kind: 'tool',
+        tool: 'grep',
+        text: 'exec',
+        subagent: 'Injection and data flow',
+      });
+      expect(summarise(readEvent('/workspace/a.js'), 1, NOW)).not.toHaveProperty('subagent');
+      expect(summarise(event(42), 1, NOW)).not.toHaveProperty('subagent');
+    });
+
+    it('shows a subagent starting and finishing, with how many are still active', () => {
+      const subagentLine = (state: string, active: number, ok?: boolean) => {
+        const event: Record<string, unknown> = { type: 'subagent', timestamp: 1_767_225_600_000, state, subagent: 'Injection', active };
+        if (ok !== undefined) event.ok = ok;
+        return JSON.stringify(event);
+      };
+      expect(summarise(subagentLine('started', 2), 1, NOW)).toEqual({
+        attempt: 1,
+        at: '2026-01-01T00:00:00.000Z',
+        kind: 'subagent',
+        subagent: 'Injection',
+        active: 2,
+        text: 'started (2 active)',
+      });
+      expect(summarise(subagentLine('finished', 1, true), 1, NOW)).toEqual({
+        attempt: 1,
+        at: '2026-01-01T00:00:00.000Z',
+        kind: 'subagent',
+        subagent: 'Injection',
+        active: 1,
+        ok: true,
+        text: 'finished (1 active)',
+      });
+      expect(summarise(subagentLine('finished', 0, false), 1, NOW)).toEqual({
+        attempt: 1,
+        at: '2026-01-01T00:00:00.000Z',
+        kind: 'subagent',
+        subagent: 'Injection',
+        active: 0,
+        ok: false,
+        text: 'failed (0 active)',
+      });
+    });
+
+    it('names the subagent a task call started, by its description', () => {
+      const taskRow = line('tool_use', { tool: 'task', state: { status: 'completed', input: { description: 'Injection and data flow' } } });
+      expect(summarise(taskRow, 1, NOW)).toMatchObject({ kind: 'tool', tool: 'task', text: 'Injection and data flow' });
+    });
   });
 
   describe('GET /api/scan/<id>/events', () => {

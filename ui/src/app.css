@@ -89,6 +89,13 @@
   font-family: var(--pf-t--global--font--family--mono, monospace);
 }
 
+/* What a subagent did is tagged with its name, ahead of the row's text. */
+.app-activity-subagent {
+  margin-right: var(--pf-t--global--spacer--sm);
+  white-space: nowrap;
+  font-family: var(--pf-t--global--font--family--body, sans-serif);
+}
+
 .app-activity-toolname {
   display: inline-block;
   min-width: 5.5rem;
@@ -97,7 +104,8 @@
 }
 
 .app-activity-step,
-.app-activity-log {
+.app-activity-log,
+.app-activity-subagent-kind {
   color: var(--pf-t--global--text--color--subtle);
 }
 
@@ -130,6 +138,11 @@
   border-radius: 50%;
   background: currentColor;
   animation: app-pulse 1.4s ease-in-out infinite;
+}
+
+/* The "N subagents active" label, beside the Live label. */
+.app-active-subagents {
+  margin-left: var(--pf-t--global--spacer--sm);
 }
 
 @keyframes app-pulse {

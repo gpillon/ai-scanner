@@ -331,7 +331,11 @@ export const api = {
 export interface Activity {
   attempt: number;
   at: string;
-  kind: 'tool' | 'text' | 'step' | 'error' | 'log';
+  kind: 'tool' | 'text' | 'step' | 'error' | 'log' | 'subagent';
+  /** The subagent that did it; absent for the main agent. */
+  subagent?: string;
+  /** For a `subagent` line: how many subagents are active, after this event. */
+  active?: number;
   tool?: string;
   ok?: boolean;
   text: string;

@@ -9,8 +9,9 @@ import PencilAltIcon from '@patternfly/react-icons/dist/esm/icons/pencil-alt-ico
 import SearchIcon from '@patternfly/react-icons/dist/esm/icons/search-icon';
 import TachometerAltIcon from '@patternfly/react-icons/dist/esm/icons/tachometer-alt-icon';
 import TerminalIcon from '@patternfly/react-icons/dist/esm/icons/terminal-icon';
+import UsersIcon from '@patternfly/react-icons/dist/esm/icons/users-icon';
 import WrenchIcon from '@patternfly/react-icons/dist/esm/icons/wrench-icon';
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { ApiError, followScan, type Activity, type ScanStatus } from '../api';
 import { isActive } from './ScanStateLabel';
 
@@ -19,7 +20,11 @@ const MAX_ROWS = 2000;
 const RETRY_MS = 2000;
 
 /** A heading row: Attempt `n`, or the model warm-up before Attempt 1 (attempt 0, ADR-0009). */
-type Row = { key: number } & ({ type: 'attempt'; attempt: number } | { type: 'activity'; activity: Activity });
+type Row = { key: number } & ({ type: 'attempt'; attempt: number } | { type: 'activity'; activity: Activity; color?: SubagentColor });
+
+type SubagentColor = 'purple' | 'teal' | 'orange' | 'green' | 'yellow' | 'orangered' | 'blue' | 'grey';
+/** One per subagent, in the order they first act; red is left to failures. */
+const SUBAGENT_COLORS: SubagentColor[] = ['purple', 'teal', 'orange', 'blue', 'green', 'yellow', 'orangered', 'grey'];
 
 const TOOL_ICONS: Record<string, ComponentType> = {
   read: FileAltIcon,
@@ -44,6 +49,8 @@ function iconOf(a: Activity): ComponentType {
       return ExclamationTriangleIcon;
     case 'log':
       return TerminalIcon;
+    case 'subagent':
+      return UsersIcon;
   }
 }
 
@@ -53,6 +60,7 @@ const KIND_CLASS: Record<Activity['kind'], string> = {
   step: 'app-activity-step',
   error: 'app-activity-error-kind',
   log: 'app-activity-log',
+  subagent: 'app-activity-subagent-kind',
 };
 
 const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -79,6 +87,11 @@ export function ActivityLog({ scanId, onState }: { scanId: string; onState?: (sc
       setRows([]);
       setError(undefined);
       let finished = false;
+      const colors = new Map<string, SubagentColor>();
+      const colorOf = (subagent: string) => {
+        if (!colors.has(subagent)) colors.set(subagent, SUBAGENT_COLORS[colors.size % SUBAGENT_COLORS.length]);
+        return colors.get(subagent);
+      };
       try {
         await followScan(
           scanId,
@@ -91,7 +104,7 @@ export function ActivityLog({ scanId, onState }: { scanId: string; onState?: (sc
               const row: Row =
                 event.type === 'attempt'
                   ? { key: key++, type: 'attempt', attempt: event.data.attempt }
-                  : { key: key++, type: 'activity', activity: event.data };
+                  : { key: key++, type: 'activity', activity: event.data, color: event.data.subagent ? colorOf(event.data.subagent) : undefined };
               setRows((prev) => {
                 // The warm-up has no `attempt` event of its own: head its lines before the first one.
                 const warmupStarts = row.type === 'activity' && row.activity.attempt === 0 && !prev.some((r) => r.type === 'attempt' && r.attempt === 0);
@@ -135,14 +148,35 @@ export function ActivityLog({ scanId, onState }: { scanId: string; onState?: (sc
     if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   };
 
+  // The subagents that have started but not finished, in the current attempt: the names the
+  // "N subagents active" label lists. A start adds a name, a finish removes it.
+  const activeNames = useMemo(() => {
+    const lastAttempt = rows.map((r) => r.type).lastIndexOf('attempt');
+    const names = new Set<string>();
+    for (const row of rows.slice(lastAttempt + 1)) {
+      if (row.type !== 'activity' || row.activity.kind !== 'subagent') continue;
+      const name = row.activity.subagent ?? '';
+      if (row.activity.ok === undefined) names.add(name);
+      else names.delete(name);
+    }
+    return [...names];
+  }, [rows]);
+
   return (
     <Card>
       <CardHeader
         actions={{
           actions: live ? (
-            <Label color="blue" className="app-live">
-              Live
-            </Label>
+            <>
+              <Label color="blue" className="app-live">
+                Live
+              </Label>
+              {activeNames.length > 0 && (
+                <Label isCompact color="blue" className="app-active-subagents" title={activeNames.join(', ')}>
+                  {activeNames.length} subagent{activeNames.length > 1 ? 's' : ''} active
+                </Label>
+              )}
+            </>
           ) : undefined,
           hasNoOffset: true,
         }}
@@ -161,7 +195,7 @@ export function ActivityLog({ scanId, onState }: { scanId: string; onState?: (sc
                   {row.attempt === 0 ? 'Model warm-up' : `Attempt ${row.attempt}`}
                 </div>
               ) : (
-                <ActivityRow key={row.key} activity={row.activity} />
+                <ActivityRow key={row.key} activity={row.activity} color={row.color} />
               ),
             )}
           </div>
@@ -171,7 +205,7 @@ export function ActivityLog({ scanId, onState }: { scanId: string; onState?: (sc
   );
 }
 
-function ActivityRow({ activity: a }: { activity: Activity }) {
+function ActivityRow({ activity: a, color }: { activity: Activity; color?: SubagentColor }) {
   const Icon = iconOf(a);
   const failed = a.kind === 'error' || a.ok === false;
   return (
@@ -181,6 +215,11 @@ function ActivityRow({ activity: a }: { activity: Activity }) {
         <Icon />
       </span>
       <span className="app-activity-text">
+        {a.subagent && (
+          <Label isCompact color={color ?? 'purple'} className="app-activity-subagent" title={`Subagent: ${a.subagent}`}>
+            {a.subagent}
+          </Label>
+        )}
         {a.kind === 'tool' && <span className="app-activity-toolname">{a.tool}</span>}
         {a.text}
       </span>

@@ -157,21 +157,20 @@ export function agentSecrets(
 /** The command the agent container runs. */
 export function agentCommand(request: AttemptRequest, model: AgentModel): string[] {
   return [
-    'sh',
-    '-c',
-    // opencode's exit code is the Attempt's; the usage line follows it, whatever it was.
-    `opencode "$@"; status=$?; node ${USAGE_SCRIPT}; exit $status`,
-    'opencode',
+    // node:sqlite, which the script reads opencode's database with, warns it is experimental.
+    'node', '--no-warnings', RUN_SCRIPT,
     // --title skips a title-generation call; stdin is not attached, so nothing joins the prompt.
     'run', '--format', 'json', '--title', request.scanId, '--dir', IN_CONTAINER.workspace, '--model', modelRef(model), request.prompt,
   ];
 }
 
 /**
- * In the agent image (containers/agent/usage.js): after opencode, it prints the Attempt's token
- * usage as the transcript's last line, `{"type":"usage", ...}`, subagents included.
+ * In the agent image (containers/agent/run.js): runs opencode with the arguments that follow it
+ * and prints its JSON event stream, adding the events of subagent sessions, which opencode's own
+ * stream lacks, then the Attempt's token usage as the transcript's last line,
+ * `{"type":"usage", ...}`, subagents included. Its exit code is opencode's.
  */
-export const USAGE_SCRIPT = '/opt/ai-scanner/usage.js';
+export const RUN_SCRIPT = '/opt/ai-scanner/run.js';
 
 /**
  * The egress proxy's allow list, `<dir>/allow.txt`: the proxy rereads it on every connection,
