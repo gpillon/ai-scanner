@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   CardBody,
+  Checkbox,
   FileUpload,
   Form,
   FormGroup,
@@ -23,7 +24,7 @@ import {
 } from '@patternfly/react-core';
 import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, SCAN_ID_PATTERN, type Model, type Profile } from '../api';
+import { api, SCAN_ID_PATTERN, type Model, type Profile, type SkillPack } from '../api';
 import { navigate, scanRoute } from '../router';
 
 /** Random, so callers never pick the same id by chance. */
@@ -40,6 +41,8 @@ export function NewScanPage() {
   const [language, setLanguage] = useState('');
   const [instructions, setInstructions] = useState('');
   const [file, setFile] = useState<File>();
+  const [packs, setPacks] = useState<SkillPack[]>([]);
+  const [chosenPacks, setChosenPacks] = useState<string[]>([]);
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string>();
@@ -53,6 +56,8 @@ export function NewScanPage() {
         setModel(m.find((x) => x.default)?.id ?? m[0]?.id ?? '');
       })
       .catch((e: Error) => setLoadError(e.message));
+    // Optional: without Skill Packs the form works as before.
+    api.skillPacks().then(setPacks).catch(() => undefined);
   }, []);
 
   const idValid = SCAN_ID_PATTERN.test(id);
@@ -65,7 +70,15 @@ export function NewScanPage() {
     setSubmitting(true);
     setSubmitError(undefined);
     try {
-      const scan = await api.createScan({ id, file, profile, model, language: language.trim(), instructions: instructions.trim() });
+      const scan = await api.createScan({
+        id,
+        file,
+        profile,
+        model,
+        language: language.trim(),
+        instructions: instructions.trim(),
+        skillPacks: chosenPacks,
+      });
       navigate(scanRoute(scan.id, 'logs'));
     } catch (e) {
       setSubmitError((e as Error).message);
@@ -129,6 +142,29 @@ export function NewScanPage() {
                     </FormHelperText>
                   )}
                 </FormGroup>
+
+                {packs.length > 0 && (
+                  <FormGroup label="Skill Packs" fieldId="skill-packs" role="group">
+                    <div className="app-checklist">
+                      {packs.map((p) => (
+                        <Checkbox
+                          key={p.id}
+                          id={`pack-${p.id}`}
+                          label={p.id}
+                          description={`${p.description ? `${p.description} · ` : ''}${p.skills.map((s) => s.name).join(', ')}`}
+                          isChecked={chosenPacks.includes(p.id)}
+                          isDisabled={submitting}
+                          onChange={(_e, on) => setChosenPacks((prev) => (on ? [...prev, p.id] : prev.filter((x) => x !== p.id)))}
+                        />
+                      ))}
+                    </div>
+                    <FormHelperText>
+                      <HelperText>
+                        <HelperTextItem>Extra skills for the agent, on top of the Scan Profile's, e.g. for the codebase's language.</HelperTextItem>
+                      </HelperText>
+                    </FormHelperText>
+                  </FormGroup>
+                )}
 
                 <FormGroup label="Model" fieldId="model">
                   <FormSelect id="model" value={model} onChange={(_e, v) => setModel(v)} isDisabled={submitting}>

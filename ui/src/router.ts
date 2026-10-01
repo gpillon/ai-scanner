@@ -11,7 +11,9 @@ export type Route =
   | { page: 'scan'; id: string; tab: ScanTab }
   | { page: 'docs' }
   | { page: 'providers' }
-  | { page: 'models' };
+  | { page: 'models' }
+  | { page: 'skills' }
+  | { page: 'skill-packs' };
 
 export function parse(hash: string): Route {
   const path = hash.replace(/^#\/?/, '');
@@ -24,6 +26,8 @@ export function parse(hash: string): Route {
   if (path === 'docs') return { page: 'docs' };
   if (path === 'admin/providers') return { page: 'providers' };
   if (path === 'admin/models') return { page: 'models' };
+  if (path === 'admin/skills') return { page: 'skills' };
+  if (path === 'admin/skill-packs') return { page: 'skill-packs' };
   return { page: 'scans' };
 }
 
@@ -42,6 +46,10 @@ export function href(route: Route): string {
       return '#/admin/providers';
     case 'models':
       return '#/admin/models';
+    case 'skills':
+      return '#/admin/skills';
+    case 'skill-packs':
+      return '#/admin/skill-packs';
     case 'scan':
       return `#/scans/${encodeURIComponent(route.id)}${route.tab === 'overview' ? '' : `/${route.tab}`}`;
   }

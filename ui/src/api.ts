@@ -13,6 +13,8 @@ export interface ScanStatus {
   startedAt: string | null;
   finishedAt: string | null;
   failureReason?: string;
+  /** The Skill Packs the Scan added to its profile, with the skills each gave it. */
+  skillPacks?: { id: string; skills: { name: string; hash: string }[] }[];
   artifacts?: string[];
 }
 
@@ -35,6 +37,7 @@ export interface NewScan {
   model?: string;
   language?: string;
   instructions?: string;
+  skillPacks?: string[];
 }
 
 /** Scan ids must match the server's pattern: lowercase letters, digits and dashes, 1-64. */
@@ -161,6 +164,24 @@ export interface NewModel {
   default?: boolean;
 }
 
+/** A skill of the Skill Library (ADR-0008). */
+export interface LibrarySkill {
+  name: string;
+  description: string;
+  source: string;
+  hash: string;
+  files: number;
+  bytes: number;
+  importedAt: string;
+  packs: string[];
+}
+
+export interface SkillPack {
+  id: string;
+  description: string;
+  skills: { name: string; description: string }[];
+}
+
 /** A JSON request body. */
 const send = (method: string, path: string, body: unknown) =>
   request(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -188,6 +209,7 @@ export const api = {
     if (scan.model) form.append('model', scan.model);
     if (scan.language) form.append('language', scan.language);
     if (scan.instructions) form.append('instructions', scan.instructions);
+    if (scan.skillPacks?.length) form.append('skillPacks', scan.skillPacks.join(','));
     form.append('file', scan.file, scan.file.name);
     const res = await request(`/api/scan/${encodeURIComponent(scan.id)}`, { method: 'POST', body: form });
     return res.json();
@@ -224,6 +246,37 @@ export const api = {
 
   async deleteModel(id: string): Promise<void> {
     await request(`/api/admin/models/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  skillPacks: async (): Promise<SkillPack[]> => (await request('/api/skill-packs')).json(),
+
+  librarySkills: async (): Promise<LibrarySkill[]> => (await request('/api/admin/skills')).json(),
+
+  librarySkill: async (name: string): Promise<LibrarySkill & { instructions: string }> =>
+    (await request(`/api/admin/skills/${encodeURIComponent(name)}`)).json(),
+
+  async uploadSkills(file: File, replace: boolean): Promise<{ imported: LibrarySkill[] }> {
+    const form = new FormData();
+    form.append('replace', String(replace));
+    form.append('file', file, file.name);
+    return (await request('/api/admin/skills', { method: 'POST', body: form })).json();
+  },
+
+  installSkills: async (source: string, skills: string[], replace: boolean): Promise<{ imported: LibrarySkill[] }> =>
+    (await send('POST', '/api/admin/skills/install', { source, ...(skills.length && { skills }), replace })).json(),
+
+  async deleteSkill(name: string): Promise<void> {
+    await request(`/api/admin/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  },
+
+  createSkillPack: async (pack: { id: string; description: string; skills: string[] }): Promise<SkillPack> =>
+    (await send('POST', '/api/admin/skill-packs', pack)).json(),
+
+  updateSkillPack: async (id: string, change: { description?: string; skills?: string[] }): Promise<SkillPack> =>
+    (await send('PATCH', `/api/admin/skill-packs/${encodeURIComponent(id)}`, change)).json(),
+
+  async deleteSkillPack(id: string): Promise<void> {
+    await request(`/api/admin/skill-packs/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
   /** Artifacts need the bearer header, so they are fetched as a Blob rather than linked. */

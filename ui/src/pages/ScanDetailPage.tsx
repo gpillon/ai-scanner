@@ -19,6 +19,7 @@ import {
   FlexItem,
   Gallery,
   Label,
+  LabelGroup,
   Modal,
   ModalBody,
   ModalFooter,
@@ -232,6 +233,20 @@ export function ScanDetailPage({ id, tab }: { id: string; tab: ScanTab }) {
                               <DescriptionListTerm>Language</DescriptionListTerm>
                               <DescriptionListDescription>{scan.language}</DescriptionListDescription>
                             </DescriptionListGroup>
+                            {scan.skillPacks && (
+                              <DescriptionListGroup>
+                                <DescriptionListTerm>Skill Packs</DescriptionListTerm>
+                                <DescriptionListDescription>
+                                  <LabelGroup numLabels={4}>
+                                    {scan.skillPacks.map((p) => (
+                                      <Label key={p.id} color="purple" isCompact title={p.skills.map((s) => s.name).join(', ')}>
+                                        {p.id}
+                                      </Label>
+                                    ))}
+                                  </LabelGroup>
+                                </DescriptionListDescription>
+                              </DescriptionListGroup>
+                            )}
                             <DescriptionListGroup>
                               <DescriptionListTerm>Attempts</DescriptionListTerm>
                               <DescriptionListDescription>{scan.attempts}</DescriptionListDescription>

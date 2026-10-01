@@ -29,6 +29,8 @@ import { DocsPage } from './pages/DocsPage';
 import { LoginPage } from './pages/LoginPage';
 import { ModelsPage } from './pages/ModelsPage';
 import { ProvidersPage } from './pages/ProvidersPage';
+import { SkillPacksPage } from './pages/SkillPacksPage';
+import { SkillsPage } from './pages/SkillsPage';
 import { NewScanPage } from './pages/NewScanPage';
 import { ScanDetailPage } from './pages/ScanDetailPage';
 import { ScansPage } from './pages/ScansPage';
@@ -125,6 +127,12 @@ export function App() {
               <NavItem to={href({ page: 'providers' })} isActive={route.page === 'providers'}>
                 Providers
               </NavItem>
+              <NavItem to={href({ page: 'skill-packs' })} isActive={route.page === 'skill-packs'}>
+                Skill Packs
+              </NavItem>
+              <NavItem to={href({ page: 'skills' })} isActive={route.page === 'skills'}>
+                Skills
+              </NavItem>
             </NavGroup>
           )}
         </Nav>
@@ -140,6 +148,8 @@ export function App() {
       {route.page === 'docs' && <DocsPage />}
       {route.page === 'models' && <ModelsPage />}
       {route.page === 'providers' && <ProvidersPage />}
+      {route.page === 'skill-packs' && <SkillPacksPage />}
+      {route.page === 'skills' && <SkillsPage />}
     </Page>
   );
 }
