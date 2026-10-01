@@ -47,6 +47,32 @@ setTimeout(() => {
 }, 2500);
 `;
 
+/**
+ * Stands in for opencode when the model answers with nothing: a subagent session gets step after
+ * step with no output and no finish reason, and opencode never exits on its own.
+ */
+const STALLING_OPENCODE = `#!/usr/bin/env node
+const { mkdirSync } = require('node:fs');
+const { join } = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
+const dir = join(process.env.HOME, '.local', 'share', 'opencode');
+mkdirSync(dir, { recursive: true });
+const db = new DatabaseSync(join(dir, 'opencode.db'));
+db.exec('PRAGMA journal_mode = WAL;');
+db.exec('CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, agent TEXT, title TEXT, cost REAL DEFAULT 0, ' +
+  'tokens_input INTEGER DEFAULT 0, tokens_output INTEGER DEFAULT 0, tokens_reasoning INTEGER DEFAULT 0, ' +
+  'tokens_cache_read INTEGER DEFAULT 0, tokens_cache_write INTEGER DEFAULT 0, time_created INTEGER)');
+db.exec('CREATE TABLE part (id TEXT PRIMARY KEY, session_id TEXT, time_updated INTEGER, data TEXT)');
+db.prepare("INSERT INTO session VALUES ('main', NULL, 'build', 'scan', 0, 0, 0, 0, 0, 0, 1)").run();
+db.prepare("INSERT INTO session VALUES ('child', 'main', 'reviewer', 'Stuck (@reviewer subagent)', 0, 0, 0, 0, 0, 0, 2)").run();
+const part = db.prepare('INSERT INTO part (id, session_id, time_updated, data) VALUES (?, ?, ?, ?)');
+let n = 0;
+setInterval(() => {
+  n++;
+  part.run('s' + n, 'child', Date.now(), JSON.stringify({ type: 'step-finish', reason: 'unknown', tokens: { total: 344580, output: 0 } }));
+}, 50);
+`;
+
 (process.platform === 'win32' ? describe.skip : describe)('Agent wrapper (containers/agent/run.js)', () => {
   let dir: string;
   beforeAll(() => {
@@ -91,5 +117,26 @@ setTimeout(() => {
     const usage = events[events.length - 1];
     expect(usage).toMatchObject({ type: 'usage', tokens: { input: 150, output: 15 } });
     expect(usage.sessions).toHaveLength(2);
+  });
+
+  it('stops opencode when a session keeps ending its steps with nothing, and exits non-zero', () => {
+    const stallDir = mkdtempSync(join(tmpdir(), 'agent-wrapper-stall-'));
+    try {
+      writeFileSync(join(stallDir, 'opencode'), STALLING_OPENCODE);
+      chmodSync(join(stallDir, 'opencode'), 0o755);
+      const run = spawnSync(process.execPath, ['--no-warnings', RUN, 'run', '--format', 'json'], {
+        env: { ...process.env, HOME: stallDir, PATH: `${stallDir}${delimiter}${process.env.PATH}` },
+        encoding: 'utf8',
+        timeout: 20_000,
+      });
+      expect(run.signal).toBeNull(); // the wrapper ended it, not the test's timeout
+      expect(run.status).not.toBe(0);
+      const events = run.stdout.trim().split('\n').map((l) => JSON.parse(l));
+      const error = events.find((e) => e.type === 'error');
+      expect(error).toMatchObject({ sessionID: 'child', subagent: 'Stuck (@reviewer subagent)', error: { name: 'StalledModel' } });
+      expect(events[events.length - 1].type).toBe('usage');
+    } finally {
+      rmSync(stallDir, { recursive: true, force: true });
+    }
   });
 });
