@@ -1,5 +1,6 @@
 import { DynamicModule, Module } from '@nestjs/common';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
+import { KubernetesRunner } from './kubernetes-runner';
 import { PodmanRunner } from './podman-runner';
 import { PlaceholderRunner, Runner } from './runner';
 
@@ -9,10 +10,12 @@ function createRunner(config: AppConfig): Runner {
       return new PlaceholderRunner();
     case 'podman':
       return new PodmanRunner(config);
+    case 'kubernetes':
+      return new KubernetesRunner(config);
   }
 }
 
-/** The Runner that executes Attempts: the one `SCANNER_RUNNER` selects, unless one is given. */
+/** The Runner that executes Attempts: the one `SCANNER_RUNNER` selects (or detects), unless one is given. */
 @Module({})
 export class RunnerModule {
   static register(override?: Runner): DynamicModule {

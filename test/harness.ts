@@ -243,6 +243,10 @@ function authed(app: INestApplication, token = TOKEN) {
   };
 }
 
+function pick<T, K extends keyof T>(from: T, ...keys: K[]): Pick<T, K> {
+  return Object.fromEntries(keys.map((k) => [k, from[k]])) as Pick<T, K>;
+}
+
 export function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     token: TOKEN,
@@ -259,7 +263,7 @@ export function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}):
     maxExtractedBytes: 64 * 1024,
     maxExtractedFiles: 20,
     runner: 'fake',
-    podman: loadConfig({ SCANNER_TOKEN: TOKEN, SCANNER_MODELS: '[{"id":"m","provider":"anthropic"}]' }).podman,
+    ...pick(loadConfig({ SCANNER_TOKEN: TOKEN, SCANNER_MODELS: '[{"id":"m","provider":"anthropic"}]' }), 'podman', 'kubernetes'),
     maxInstructionsLength: 200,
     retentionDays: 365,
     sweepIntervalMs: 0,

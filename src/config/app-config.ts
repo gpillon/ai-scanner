@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { APP_ROOT } from '../common/app-root';
+import { inCluster } from '../runner/kube-api';
 
 export const APP_CONFIG = Symbol('APP_CONFIG');
 
@@ -14,8 +15,42 @@ export interface ModelEntry {
   apiKeyEnv?: string;
 }
 
-export const RUNNER_KINDS = ['podman', 'fake'] as const;
+export const RUNNER_KINDS = ['podman', 'kubernetes', 'fake'] as const;
 export type RunnerKind = (typeof RUNNER_KINDS)[number];
+
+/**
+ * The Runner when SCANNER_RUNNER is `auto` or unset: `kubernetes` inside a pod with its
+ * ServiceAccount token mounted, `podman` anywhere else.
+ */
+export function detectRunner(env: NodeJS.ProcessEnv = process.env): RunnerKind {
+  return inCluster(env) ? 'kubernetes' : 'podman';
+}
+
+/**
+ * How the Kubernetes Runner runs agent pods (ADR-0007). What is left unset is discovered from
+ * the server's own pod: its namespace, the claim holding the data directory, the node, image,
+ * image pull secrets and fsGroup, and the Service exposing the egress proxy.
+ */
+export interface KubernetesConfig {
+  /** Unset: the server's image with `-agent` added to the repository name. */
+  agentImage?: string;
+  /** The egress proxy's URL as agent pods reach it. Unset: the Service selecting the server pod with a port named `egress`. */
+  egressProxy?: string;
+  /** The PersistentVolumeClaim holding the data directory. Unset: the one the server pod mounts there. */
+  dataClaim?: string;
+  /** ServiceAccount of agent pods; it needs no permission, and its token is never mounted. */
+  agentServiceAccount?: string;
+  /** Names of server environment variables passed to the agent, such as model API keys. */
+  agentEnv: string[];
+  /** Limits of each agent pod, in Kubernetes quantities. */
+  memory: string;
+  cpu: string;
+  /**
+   * Schedule agent pods on the server's node, so they can mount its ReadWriteOnce claim.
+   * `auto`: when the claim is not ReadWriteMany.
+   */
+  colocate: 'auto' | 'always' | 'never';
+}
 
 /** How the Podman Runner runs agent containers (ADR-0003). */
 export interface PodmanConfig {
@@ -37,9 +72,13 @@ export interface AppConfig {
   adminToken?: string;
   /** Encrypts the Provider API keys stored in the database; without it, keys cannot be stored. */
   secretKey?: string;
-  /** `podman` runs the agent in a container per Attempt; `fake` writes a placeholder Report. */
+  /**
+   * `podman` runs the agent in a container per Attempt, `kubernetes` in a pod per Attempt;
+   * `fake` writes a placeholder Report. SCANNER_RUNNER `auto` (the default) picks one: see detectRunner.
+   */
   runner: RunnerKind;
   podman: PodmanConfig;
+  kubernetes: KubernetesConfig;
   dataDir: string;
   profilesDir: string;
   /** The built web UI, served under /ui/ when the directory exists. */
@@ -105,9 +144,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const secretKey = env.SCANNER_SECRET_KEY || undefined;
   if (secretKey && secretKey.length < 16) throw new Error('SCANNER_SECRET_KEY must be at least 16 characters');
 
-  const runner = (env.SCANNER_RUNNER || 'podman') as RunnerKind;
+  const runner = (!env.SCANNER_RUNNER || env.SCANNER_RUNNER === 'auto' ? detectRunner(env) : env.SCANNER_RUNNER) as RunnerKind;
   if (!RUNNER_KINDS.includes(runner)) {
-    throw new Error(`SCANNER_RUNNER must be one of ${RUNNER_KINDS.join(', ')}: ${env.SCANNER_RUNNER}`);
+    throw new Error(`SCANNER_RUNNER must be auto or one of ${RUNNER_KINDS.join(', ')}: ${env.SCANNER_RUNNER}`);
+  }
+  const colocate = (env.SCANNER_K8S_COLOCATE || 'auto') as KubernetesConfig['colocate'];
+  if (!['auto', 'always', 'never'].includes(colocate)) {
+    throw new Error(`SCANNER_K8S_COLOCATE must be auto, always or never: ${colocate}`);
   }
 
   return {
@@ -121,6 +164,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       proxyImage: env.SCANNER_EGRESS_PROXY_IMAGE || 'docker.io/library/node:22-alpine',
       agentEnv: list(env.SCANNER_AGENT_ENV),
       memory: env.SCANNER_AGENT_MEMORY || '4g',
+    },
+    kubernetes: {
+      agentImage: env.SCANNER_AGENT_IMAGE || undefined,
+      egressProxy: env.SCANNER_K8S_EGRESS_PROXY || undefined,
+      dataClaim: env.SCANNER_K8S_DATA_CLAIM || undefined,
+      agentServiceAccount: env.SCANNER_K8S_AGENT_SERVICE_ACCOUNT || undefined,
+      agentEnv: list(env.SCANNER_AGENT_ENV),
+      memory: env.SCANNER_K8S_AGENT_MEMORY || '4Gi',
+      cpu: env.SCANNER_K8S_AGENT_CPU || '2',
+      colocate,
     },
     dataDir: resolve(env.SCANNER_DATA_DIR ?? 'data'),
     profilesDir: resolve(env.SCANNER_PROFILES_DIR ?? resolve(APP_ROOT, 'profiles')),

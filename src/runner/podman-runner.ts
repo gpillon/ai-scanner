@@ -1,14 +1,14 @@
 import { Logger, OnModuleInit } from '@nestjs/common';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { APP_ROOT } from '../common/app-root';
 import { paths } from '../common/paths';
 import { AppConfig, ModelEntry, PodmanConfig } from '../config/app-config';
 import { endpointOf, isBuiltInKind, KIND_INFO } from '../models/provider-kinds';
+import { agentCommand, agentEnv, agentSecrets, AllowList, IN_CONTAINER } from './agent-spec';
 import { AgentModel, AttemptRequest, AttemptResult, Runner } from './runner';
 
 /** Agent containers join only this network: it has no route out of the host. */
@@ -29,73 +29,6 @@ export function modelEndpoint(model: ModelEntry): string {
   return endpointOf(url);
 }
 
-/** The env var the agent finds a key stored in the database under (see withSecrets). */
-const STORED_KEY_ENV = 'SCANNER_MODEL_API_KEY';
-
-/** Paths inside the agent container. */
-const IN_CONTAINER = {
-  workspace: '/workspace',
-  output: '/output',
-  skills: '/skills',
-  home: '/home/agent',
-};
-
-/**
- * The opencode configuration of an Attempt: the chosen model, and tools limited to reading the
- * workspace and the skills, and writing under /output. Every rule resolves to allow or deny:
- * `opencode run` rejects what would ask, and ends the Attempt.
- */
-/** How opencode names the model: `provider/model`. */
-function modelRef(model: AgentModel): string {
-  return `${model.provider}/${model.name}`;
-}
-
-function opencodeConfig(model: AgentModel, withSkills: boolean): object {
-  const ref = modelRef(model);
-  const builtIn = model.builtIn;
-  const keyEnv = model.apiKey ? STORED_KEY_ENV : model.apiKeyEnv;
-  const options = {
-    ...(model.baseUrl && { baseURL: model.baseUrl }),
-    ...(keyEnv && { apiKey: `{env:${keyEnv}}` }),
-  };
-  return {
-    $schema: 'https://opencode.ai/config.json',
-    model: ref,
-    small_model: ref,
-    enabled_providers: [model.provider],
-    provider: {
-      [model.provider]: builtIn
-        ? { options }
-        : { npm: '@ai-sdk/openai-compatible', name: model.provider, options, models: { [model.name]: { tool_call: true } } },
-    },
-    ...(withSkills && { skills: { paths: [IN_CONTAINER.skills] } }),
-    autoupdate: false,
-    share: 'disabled',
-    snapshot: false,
-    lsp: false,
-    formatter: false,
-    permission: {
-      '*': 'deny',
-      invalid: 'allow', // opencode's reply to a malformed tool call; `*` would hide it
-      read: 'allow',
-      glob: 'allow',
-      grep: 'allow',
-      list: 'allow',
-      skill: 'allow',
-      todowrite: 'allow',
-      bash: 'deny',
-      webfetch: 'deny',
-      websearch: 'deny',
-      task: 'deny',
-      question: 'deny',
-      doom_loop: 'deny',
-      // Relative to the worktree: `/`, or /workspace should opencode ever see a git repository there.
-      edit: { '*': 'deny', 'output/*': 'allow', '../output/*': 'allow' },
-      external_directory: { '*': 'deny', [`${IN_CONTAINER.output}/*`]: 'allow', [`${IN_CONTAINER.skills}/*`]: 'allow' },
-    },
-  };
-}
-
 interface RunningAttempt {
   container: string;
   stopped: boolean;
@@ -112,8 +45,7 @@ export class PodmanRunner extends Runner implements OnModuleInit {
   private readonly podman: PodmanConfig;
   /** Host directory holding the proxy's allow list. */
   private readonly egressDir: string;
-  /** What the allow list holds now, so an unchanged one is not rewritten. */
-  private egressWritten?: string;
+  private readonly allowList: AllowList;
   private readonly running = new Map<string, RunningAttempt>();
   private ready?: Promise<void>;
 
@@ -121,6 +53,7 @@ export class PodmanRunner extends Runner implements OnModuleInit {
     super();
     this.podman = config.podman;
     this.egressDir = paths.egress(config.dataDir);
+    this.allowList = new AllowList(this.egressDir, (m) => this.log.log(m));
   }
 
   async run(request: AttemptRequest): Promise<AttemptResult> {
@@ -129,7 +62,7 @@ export class PodmanRunner extends Runner implements OnModuleInit {
     try {
       await this.prepared();
       // The proxy reads it for every connection: an Attempt sees the Model Pool as it is now.
-      await this.writeEgress(request.egress);
+      await this.allowList.write(request.egress);
       const model = request.agentModel;
       await this.withSecrets(model, (envFile) =>
         this.exec(['create', '--env-file', envFile, ...this.containerArgs(request, attempt.container, model)]),
@@ -164,24 +97,7 @@ export class PodmanRunner extends Runner implements OnModuleInit {
 
   private containerArgs(request: AttemptRequest, name: string, model: AgentModel): string[] {
     const proxy = `http://${PROXY_CONTAINER}:${PROXY_PORT}`;
-    const env: Record<string, string> = {
-      HOME: IN_CONTAINER.home,
-      // Merged last, over any configuration opencode finds; and the Source Archive's own
-      // opencode.json, .opencode/, AGENTS.md and skills are never loaded.
-      OPENCODE_CONFIG_CONTENT: JSON.stringify(opencodeConfig(model, Boolean(request.skillsDir))),
-      OPENCODE_DISABLE_PROJECT_CONFIG: '1',
-      OPENCODE_DISABLE_EXTERNAL_SKILLS: '1',
-      OPENCODE_DISABLE_CLAUDE_CODE: '1',
-      OPENCODE_PURE: '1',
-      OPENCODE_DISABLE_AUTOUPDATE: '1',
-      OPENCODE_DISABLE_MODELS_FETCH: '1',
-      OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
-      OPENCODE_DISABLE_SHARE: '1',
-      HTTPS_PROXY: proxy,
-      HTTP_PROXY: proxy,
-      https_proxy: proxy,
-      http_proxy: proxy,
-    };
+    const env = agentEnv(request, model, proxy);
     const args = [
       '--name', name,
       '--label', `${SCAN_LABEL}=${request.scanId}`,
@@ -210,18 +126,7 @@ export class PodmanRunner extends Runner implements OnModuleInit {
    * client (Windows, macOS) would not forward `--env NAME` values from this process.
    */
   private async withSecrets<T>(model: AgentModel, use: (envFile: string) => Promise<T>): Promise<T> {
-    const names = new Set([...this.podman.agentEnv, ...(model.apiKeyEnv ? [model.apiKeyEnv] : [])]);
-    const lines: string[] = [];
-    if (model.apiKey) {
-      if (/[\r\n]/.test(model.apiKey)) throw new Error('The model API key spans several lines, which an env file cannot hold');
-      lines.push(`${STORED_KEY_ENV}=${model.apiKey}`);
-    }
-    for (const name of names) {
-      const value = process.env[name];
-      if (value === undefined) this.log.warn(`${name} is not set: the agent will run without it`);
-      else if (/[\r\n]/.test(value)) throw new Error(`${name} spans several lines, which an env file cannot hold`);
-      else lines.push(`${name}=${value}`);
-    }
+    const lines = Object.entries(agentSecrets(model, this.podman.agentEnv, (m) => this.log.warn(m))).map(([k, v]) => `${k}=${v}`);
     const dir = await mkdtemp(join(tmpdir(), 'ai-scanner-env-'));
     try {
       const file = join(dir, 'agent.env');
@@ -234,8 +139,7 @@ export class PodmanRunner extends Runner implements OnModuleInit {
 
   /** The command the agent container runs. */
   protected agentCommand(request: AttemptRequest, model: AgentModel): string[] {
-    // --title skips a title-generation call; stdin is not attached, so nothing joins the prompt.
-    return ['opencode', 'run', '--format', 'json', '--title', request.scanId, '--dir', IN_CONTAINER.workspace, '--model', modelRef(model), request.prompt];
+    return agentCommand(request, model);
   }
 
   /**
@@ -265,19 +169,6 @@ export class PodmanRunner extends Runner implements OnModuleInit {
       '--env', `PORT=${PROXY_PORT}`,
       this.podman.proxyImage, 'node', '/proxy.js',
     ]);
-  }
-
-  /** Replaces the proxy's allow list whole, so it never reads a half-written one. */
-  private async writeEgress(endpoints: string[]): Promise<void> {
-    const file = join(this.egressDir, 'allow.txt');
-    const content = endpoints.map((e) => `${e}\n`).join('');
-    if (content === this.egressWritten) return;
-    // A name of its own: Attempts running at once may both be writing.
-    const temp = `${file}.${randomUUID()}.tmp`;
-    await writeFile(temp, content);
-    await rename(temp, file);
-    this.egressWritten = content;
-    this.log.log(`Egress proxy allows: ${endpoints.join(', ') || 'nothing'}`);
   }
 
   private async remove(container: string): Promise<void> {
