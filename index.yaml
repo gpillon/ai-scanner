@@ -4,6 +4,29 @@ entries:
   - annotations:
       artifacthub.io/license: Apache-2.0
     apiVersion: v2
+    appVersion: 0.5.0
+    created: "2026-10-01T16:08:40.720052482Z"
+    description: HTTP service that runs an AI coding agent on uploaded source code
+      and returns a Report. Each Scan Attempt runs as an isolated agent pod, in the
+      release's namespace.
+    digest: e87596433b389e94ff83aa99228062daa67b7d4adf159834a3a01031c39a642f
+    home: https://github.com/gpillon/ai-scanner
+    keywords:
+    - security
+    - code-review
+    - ai
+    - agent
+    kubeVersion: '>=1.27.0-0'
+    name: ai-scanner
+    sources:
+    - https://github.com/gpillon/ai-scanner
+    type: application
+    urls:
+    - https://gpillon.github.io/ai-scanner/charts/ai-scanner-0.5.0.tgz
+    version: 0.5.0
+  - annotations:
+      artifacthub.io/license: Apache-2.0
+    apiVersion: v2
     appVersion: 0.4.1
     created: "2026-10-01T14:39:51.310119309Z"
     description: HTTP service that runs an AI coding agent on uploaded source code
@@ -116,4 +139,4 @@ entries:
     urls:
     - https://gpillon.github.io/ai-scanner/charts/ai-scanner-0.1.0.tgz
     version: 0.1.0
-generated: "2026-10-01T14:39:51.309491493Z"
+generated: "2026-10-01T16:08:40.719346651Z"
