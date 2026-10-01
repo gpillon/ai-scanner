@@ -8,10 +8,13 @@ metadata:
   name: {{ include "ai-scanner.fullname" . }}
   labels:
     {{- include "ai-scanner.labels" . | nindent 4 }}
-  {{- with .Values.expose.annotations }}
   annotations:
+    # The router's 30 s default would cut a Scan submitted from a Git repository while it is
+    # fetched, and an idle activity stream (server-sent events).
+    haproxy.router.openshift.io/timeout: {{ .Values.expose.timeout | quote }}
+    {{- with .Values.expose.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   {{- with .Values.expose.host }}
   host: {{ . | quote }}

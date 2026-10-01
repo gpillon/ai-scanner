@@ -122,3 +122,7 @@ expose:
   className: ""
   # Added to the Route or the Ingress, e.g. cert-manager or router settings.
   annotations: {}
+  # Route only: how long the router waits on a request or an idle connection. It must cover a
+  # Scan submitted from a Git repository (fetched during the request) and the activity stream.
+  # For an Ingress, set the controller's own annotation (e.g. nginx's proxy-read-timeout).
+  timeout: 600s
