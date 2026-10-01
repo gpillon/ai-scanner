@@ -58,8 +58,8 @@ agent:
 scanner:
   concurrency: 2
   maxAttempts: 3
-  attemptTimeoutMinutes: 20
-  scanTimeoutMinutes: 60
+  attemptTimeoutMinutes: 180
+  scanTimeoutMinutes: 540
   # How long a Scan waits for its model to answer a first completion (a scaled-to-zero model
   # may take many minutes). 0 skips the warm-up.
   warmupTimeoutMinutes: 30

@@ -198,8 +198,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     retentionDays: num(env.SCANNER_RETENTION_DAYS, 365),
     sweepIntervalMs: num(env.SCANNER_SWEEP_INTERVAL_MINUTES, 60) * MINUTE_MS,
     maxAttempts: positiveInt(env.SCANNER_MAX_ATTEMPTS, 3),
-    attemptTimeoutMs: positive(env.SCANNER_ATTEMPT_TIMEOUT_MINUTES, 20) * MINUTE_MS,
-    scanTimeoutMs: positive(env.SCANNER_SCAN_TIMEOUT_MINUTES, 60) * MINUTE_MS,
+    attemptTimeoutMs: positive(env.SCANNER_ATTEMPT_TIMEOUT_MINUTES, 180) * MINUTE_MS,
+    scanTimeoutMs: positive(env.SCANNER_SCAN_TIMEOUT_MINUTES, 540) * MINUTE_MS,
     concurrency: positiveInt(env.SCANNER_CONCURRENCY, 2),
     warmupTimeoutMs: num(env.SCANNER_WARMUP_TIMEOUT_MINUTES, 30) * MINUTE_MS,
     git: {
