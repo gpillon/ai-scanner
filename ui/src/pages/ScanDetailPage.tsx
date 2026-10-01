@@ -275,9 +275,11 @@ export function ScanDetailPage({ id, tab }: { id: string; tab: ScanTab }) {
                           <Skeleton height="160px" screenreaderText="Loading" />
                         ) : scan.state !== 'succeeded' ? (
                           <Content component="p">
-                            {isActive(scan.state)
-                              ? 'The Report will be available here when the Scan succeeds. This page refreshes on its own.'
-                              : 'A failed Scan has no Artifacts.'}
+                            {scan.state === 'warming'
+                              ? 'The model is warming up; the agent starts once it answers. This page refreshes on its own.'
+                              : isActive(scan.state)
+                                ? 'The Report will be available here when the Scan succeeds. This page refreshes on its own.'
+                                : 'A failed Scan has no Artifacts.'}
                           </Content>
                         ) : (
                           <Stack hasGutter>

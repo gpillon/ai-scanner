@@ -18,6 +18,7 @@ import { isActive } from './ScanStateLabel';
 const MAX_ROWS = 2000;
 const RETRY_MS = 2000;
 
+/** A heading row: Attempt `n`, or the model warm-up before Attempt 1 (attempt 0, ADR-0009). */
 type Row = { key: number } & ({ type: 'attempt'; attempt: number } | { type: 'activity'; activity: Activity });
 
 const TOOL_ICONS: Record<string, ComponentType> = {
@@ -91,7 +92,13 @@ export function ActivityLog({ scanId, onState }: { scanId: string; onState?: (sc
                 event.type === 'attempt'
                   ? { key: key++, type: 'attempt', attempt: event.data.attempt }
                   : { key: key++, type: 'activity', activity: event.data };
-              setRows((prev) => (prev.length >= MAX_ROWS ? [...prev.slice(-MAX_ROWS + 1), row] : [...prev, row]));
+              setRows((prev) => {
+                // The warm-up has no `attempt` event of its own: head its lines before the first one.
+                const warmupStarts = row.type === 'activity' && row.activity.attempt === 0 && !prev.some((r) => r.type === 'attempt' && r.attempt === 0);
+                const added: Row[] = warmupStarts ? [{ key: key++, type: 'attempt', attempt: 0 }, row] : [row];
+                const next = [...prev, ...added];
+                return next.length > MAX_ROWS ? next.slice(-MAX_ROWS) : next;
+              });
             } else if (event.type === 'deleted') {
               finished = true;
               setLive(false);
@@ -151,7 +158,7 @@ export function ActivityLog({ scanId, onState }: { scanId: string; onState?: (sc
             {rows.map((row) =>
               row.type === 'attempt' ? (
                 <div key={row.key} className="app-activity-attempt">
-                  Attempt {row.attempt}
+                  {row.attempt === 0 ? 'Model warm-up' : `Attempt ${row.attempt}`}
                 </div>
               ) : (
                 <ActivityRow key={row.key} activity={row.activity} />

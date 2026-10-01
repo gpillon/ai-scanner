@@ -1,6 +1,7 @@
 // Client of the ai-scanner HTTP API. Every endpoint needs the shared bearer token (ADR-0002).
 
-export type ScanState = 'queued' | 'running' | 'succeeded' | 'failed';
+/** `warming`: the model is woken up before the first Attempt (ADR-0009). */
+export type ScanState = 'queued' | 'warming' | 'running' | 'succeeded' | 'failed';
 
 export interface ScanStatus {
   id: string;
