@@ -179,6 +179,7 @@ describe('Kubernetes Runner', () => {
       agentModel: { provider: 'anthropic', builtIn: true, name: 'claude-x', apiKey: 'sk-secret-123' },
       egress: ['api.anthropic.com:443', 'llm.internal:8000'],
       modelEgress: ['api.anthropic.com:443'],
+      attemptTimeoutMs: 240 * 60_000,
       ...over,
     };
   }
@@ -219,6 +220,8 @@ describe('Kubernetes Runner', () => {
     expect(spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms).toEqual([
       { matchFields: [{ key: 'metadata.name', operator: 'In', values: ['node-a'] }] },
     ]);
+    // The Scan's own Attempt timeout, plus a margin: the supervisor stops it first.
+    expect(spec.activeDeadlineSeconds).toBe(240 * 60 + 300);
     expect(agent.image).toBe('ghcr.io/acme/ai-scanner-agent:1.2.3');
     expect(agent.securityContext).toEqual({ allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ['ALL'] } });
     // opencode, through the wrapper that adds its subagents' events and the usage line.

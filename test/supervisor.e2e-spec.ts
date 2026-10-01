@@ -257,6 +257,19 @@ describe('Scan Supervisor', () => {
       expect(h.runner.stopCalls).toEqual(['s1', 's1', 's1']);
     });
 
+    it("stops an Attempt at the Scan's own timeout, not the server's", async () => {
+      await start({ config: { attemptTimeoutMs: 20 * MINUTE, scanTimeoutMs: 600 * MINUTE } });
+      h.runner.script = scripts.hang();
+      await h.submit('s1', { profile: 'security', attemptTimeoutMinutes: '45' });
+      await waitUntil(() => h.runner.calls.length === 1, 'the first Attempt');
+      h.clock.advance(20 * MINUTE);
+      await settle();
+      expect(h.runner.stopCalls).toEqual([]);
+      h.clock.advance(25 * MINUTE);
+      await waitUntil(() => h.runner.calls.length === 2, 'the second Attempt');
+      expect(h.runner.stopCalls).toEqual(['s1']);
+    });
+
     it('fails the Scan at the Scan timeout even when Attempts remain', async () => {
       await start({ config: { attemptTimeoutMs: 20 * MINUTE, scanTimeoutMs: 30 * MINUTE } });
       h.runner.script = scripts.hang();

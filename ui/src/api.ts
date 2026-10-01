@@ -10,6 +10,8 @@ export interface ScanStatus {
   model: string;
   language: string;
   attempts: number;
+  /** Minutes each Attempt may run, when the caller chose it; absent: the server setting. */
+  attemptTimeoutMinutes?: number;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -70,6 +72,7 @@ export interface NewScan {
   language?: string;
   instructions?: string;
   skillPacks?: string[];
+  attemptTimeoutMinutes?: number;
 }
 
 /** Scan ids must match the server's pattern: lowercase letters, digits and dashes, 1-64. */
@@ -241,6 +244,7 @@ export const api = {
     if (scan.model) form.append('model', scan.model);
     if (scan.language) form.append('language', scan.language);
     if (scan.instructions) form.append('instructions', scan.instructions);
+    if (scan.attemptTimeoutMinutes) form.append('attemptTimeoutMinutes', String(scan.attemptTimeoutMinutes));
     if (scan.skillPacks?.length) form.append('skillPacks', scan.skillPacks.join(','));
     if (scan.file) form.append('file', scan.file, scan.file.name);
     if (scan.repo) {

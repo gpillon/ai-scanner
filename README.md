@@ -50,7 +50,7 @@ curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/models
 
 curl -H "Authorization: Bearer $TOKEN" -F file=@code.zip -F profile=security \
      -F language=en -F instructions="Focus on the payment module" \
-     -F skillPacks=java,frontend \
+     -F skillPacks=java,frontend -F attemptTimeoutMinutes=240 \
      localhost:3000/api/scan/$ID
 
 # Or scan a Git repository instead of a zip: ref and credentials are optional.
@@ -81,7 +81,7 @@ The OpenAPI document is at `/api/openapi.json`, and `/api/docs` renders it. Neit
 The UI lives in [`ui/`](ui): Vite, React, TypeScript and [PatternFly](https://www.patternfly.org). Its pages:
 
 - **Scans**: every Scan on the server, newest first, with live state and a filter.
-- **New Scan**: upload a zip and pick a profile, model, language and instructions. The Scan id is a random UUID.
+- **New Scan**: upload a zip and pick a profile, model, language, instructions and how long each Attempt may run. The Scan id is a random UUID.
 - **Scan**: details, failure reason, Artifact downloads, a Findings table, and delete. An **Activity** log shows what the agent does as it does it, and still shows it after the Scan has finished.
 - **Documentation**: the backend's Swagger UI, already signed in with your token.
 - **Administration** (admin token only): **Models**, **Providers**, **Skill Packs** and **Skills**, see below.
@@ -147,7 +147,7 @@ Environment variables, read at startup. `.env.example` has a starting point.
 | `SCANNER_MAX_EXTRACTED_MB` / `SCANNER_MAX_EXTRACTED_FILES` | `1024` / `100000` | Extraction limits |
 | `SCANNER_MAX_INSTRUCTIONS_LENGTH` | `2000` | Characters of caller instructions |
 | `SCANNER_MAX_ATTEMPTS` | `3` | Attempts before a Scan fails |
-| `SCANNER_ATTEMPT_TIMEOUT_MINUTES` / `SCANNER_SCAN_TIMEOUT_MINUTES` | `180` / `540` | Timeouts |
+| `SCANNER_ATTEMPT_TIMEOUT_MINUTES` / `SCANNER_SCAN_TIMEOUT_MINUTES` | `180` / `540` | Timeouts; a Scan may set its own Attempt timeout (`attemptTimeoutMinutes`) |
 | `SCANNER_CONCURRENCY` | `2` | Scans running at once |
 | `SCANNER_WARMUP_TIMEOUT_MINUTES` | `30` | How long a Scan waits, in state `warming`, for its model to answer a first completion before its first Attempt ([ADR-0009](docs/adr/0009-model-warm-up-before-attempts.md)); `0` skips it |
 | `SCANNER_RETENTION_DAYS` / `SCANNER_SWEEP_INTERVAL_MINUTES` | `365` / `60` | Retention, and how often it is enforced (`0` = never) |

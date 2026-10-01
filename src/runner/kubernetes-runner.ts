@@ -413,11 +413,11 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
   };
 
   /** Settings agent and proxy pods share: no token, no service links, no restart, a deadline. */
-  private podBasics(env: KubernetesEnvironment): object {
+  private podBasics(env: KubernetesEnvironment, request: AttemptRequest): object {
     return {
       restartPolicy: 'Never',
       // A backstop only: the supervisor stops the Attempt at its own timeout.
-      activeDeadlineSeconds: Math.ceil(this.config.attemptTimeoutMs / 1000) + 300,
+      activeDeadlineSeconds: Math.ceil(request.attemptTimeoutMs / 1000) + 300,
       terminationGracePeriodSeconds: 5,
       automountServiceAccountToken: false,
       enableServiceLinks: false,
@@ -434,7 +434,7 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
       kind: 'Pod',
       metadata: this.metadata(env, request, name, pod, 'egress-proxy'),
       spec: {
-        ...this.podBasics(env),
+        ...this.podBasics(env, request),
         containers: [
           {
             name: 'egress-proxy',
@@ -468,7 +468,7 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
       kind: 'Pod',
       metadata: this.metadata(env, request, name, name, 'agent'),
       spec: {
-        ...this.podBasics(env),
+        ...this.podBasics(env, request),
         // No DNS: the agent reaches its proxy by IP, and the NetworkPolicies drop DNS anyway. A
         // resolver on loopback, where nothing listens, makes any lookup fail at once instead of
         // waiting out timeouts on dropped packets (20 s each, before search domains).

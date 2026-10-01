@@ -37,6 +37,7 @@ export interface CreateScanInput {
   language?: string;
   instructions?: string;
   skillPacks?: string[];
+  attemptTimeoutMinutes?: number;
 }
 
 const ZIP_MAGICS = [Buffer.from('PK\x03\x04', 'latin1'), Buffer.from('PK\x05\x06', 'latin1')];
@@ -99,6 +100,7 @@ export class ScansService {
       language: input.language ?? this.config.defaultLanguage,
       instructions,
       attempts: 0,
+      attemptTimeoutMinutes: input.attemptTimeoutMinutes ?? null,
       createdAt: this.clock.now().toISOString(),
       startedAt: null,
       finishedAt: null,

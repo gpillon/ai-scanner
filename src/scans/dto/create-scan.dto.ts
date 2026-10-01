@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsArray, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
+import { IsArray, IsInt, IsNotEmpty, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
 
 const emptyToUndefined = () => Transform(({ value }) => (value === '' ? undefined : value));
 
@@ -61,6 +61,18 @@ export class CreateScanDto {
   @IsOptional()
   @IsString()
   gitToken?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Minutes each Attempt may run before it is stopped, 1 to 1440. Defaults to the server setting ' +
+      '(SCANNER_ATTEMPT_TIMEOUT_MINUTES). The server-wide Scan timeout still applies.',
+  })
+  @Transform(({ value }) => (value === undefined || value === '' ? undefined : Number(value)))
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1440)
+  attemptTimeoutMinutes?: number;
 
   @ApiPropertyOptional({ description: 'Short free-text instructions to steer the analysis (length-limited).' })
   @emptyToUndefined()

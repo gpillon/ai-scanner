@@ -22,6 +22,8 @@ export interface AttemptRequest {
   egress: string[];
   /** The `host:port` this Scan's model is served from: all a proxy of this Scan alone lets through. */
   modelEgress: string[];
+  /** How long the supervisor lets the Attempt run: the Scan's own setting, or the server's. */
+  attemptTimeoutMs: number;
 }
 
 /** A Model Pool model as the agent needs it. */

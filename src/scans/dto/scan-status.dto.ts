@@ -9,6 +9,8 @@ export class ScanStatusDto {
   @ApiProperty() model: string;
   @ApiProperty() language: string;
   @ApiProperty({ description: 'Number of Attempts made so far' }) attempts: number;
+  @ApiPropertyOptional({ description: 'Minutes each Attempt may run, when the caller chose it; the server setting otherwise' })
+  attemptTimeoutMinutes?: number;
   @ApiProperty() createdAt: string;
   @ApiProperty({ nullable: true, type: String }) startedAt: string | null;
   @ApiProperty({ nullable: true, type: String }) finishedAt: string | null;
@@ -40,6 +42,7 @@ export class ScanStatusDto {
       model: scan.model,
       language: scan.language,
       attempts: scan.attempts,
+      ...(scan.attemptTimeoutMinutes && { attemptTimeoutMinutes: scan.attemptTimeoutMinutes }),
       createdAt: scan.createdAt,
       startedAt: scan.startedAt,
       finishedAt: scan.finishedAt,

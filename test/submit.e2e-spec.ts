@@ -145,4 +145,27 @@ describe('submitting a Scan', () => {
       expect(h.runner.calls[0].prompt).not.toContain('caller-instructions');
     });
   });
+
+  describe('Attempt timeout', () => {
+    it('rejects a value that is not whole minutes from 1 to 1440 with 400', async () => {
+      for (const v of ['0', '1441', '2.5', 'soon']) {
+        expect((await h.submit('s1', { profile: 'security', attemptTimeoutMinutes: v })).status).toBe(400);
+      }
+    });
+
+    it("records the caller's timeout and gives it to every Attempt", async () => {
+      const res = await h.submit('s1', { profile: 'security', attemptTimeoutMinutes: '240' });
+      expect(res.status).toBe(201);
+      expect(res.body.attemptTimeoutMinutes).toBe(240);
+      await h.waitForState('s1', 'succeeded');
+      expect(h.runner.calls[0].attemptTimeoutMs).toBe(240 * 60_000);
+    });
+
+    it('uses the server setting when none is given', async () => {
+      const res = await h.submit('s1');
+      expect(res.body).not.toHaveProperty('attemptTimeoutMinutes');
+      await h.waitForState('s1', 'succeeded');
+      expect(h.runner.calls[0].attemptTimeoutMs).toBe(20 * 60_000);
+    });
+  });
 });

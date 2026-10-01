@@ -43,6 +43,7 @@ export function NewScanPage() {
   const [model, setModel] = useState('');
   const [language, setLanguage] = useState('');
   const [instructions, setInstructions] = useState('');
+  const [timeout, setTimeoutMinutes] = useState('');
   const [file, setFile] = useState<File>();
   const [sourceKind, setSourceKind] = useState<'zip' | 'git'>('zip');
   const [git, setGit] = useState<GitSourceValue>(emptyGitSource);
@@ -67,7 +68,9 @@ export function NewScanPage() {
 
   const idValid = SCAN_ID_PATTERN.test(id);
   const hasSource = sourceKind === 'zip' ? Boolean(file) : Boolean(git.url.trim());
-  const canSubmit = idValid && Boolean(profile) && hasSource && !submitting;
+  // Empty: the server setting. Otherwise whole minutes, as the server accepts them.
+  const timeoutValid = timeout.trim() === '' || (/^\d+$/.test(timeout.trim()) && +timeout >= 1 && +timeout <= 1440);
+  const canSubmit = idValid && Boolean(profile) && hasSource && timeoutValid && !submitting;
   const selectedProfile = profiles?.find((p) => p.name === profile);
 
   async function submit(event: FormEvent) {
@@ -92,6 +95,7 @@ export function NewScanPage() {
         language: language.trim(),
         instructions: instructions.trim(),
         skillPacks: chosenPacks,
+        attemptTimeoutMinutes: timeout.trim() ? Number(timeout) : undefined,
       });
       navigate(scanRoute(scan.id, 'logs'));
     } catch (e) {
@@ -225,6 +229,27 @@ export function NewScanPage() {
                   <FormHelperText>
                     <HelperText>
                       <HelperTextItem>A language code such as en, it or pt-BR.</HelperTextItem>
+                    </HelperText>
+                  </FormHelperText>
+                </FormGroup>
+
+                <FormGroup label="Attempt timeout (minutes)" fieldId="attempt-timeout">
+                  <TextInput
+                    id="attempt-timeout"
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={timeout}
+                    placeholder="Server default, e.g. 180"
+                    onChange={(_e, v) => setTimeoutMinutes(v)}
+                    validated={timeoutValid ? 'default' : 'error'}
+                    isDisabled={submitting}
+                  />
+                  <FormHelperText>
+                    <HelperText>
+                      <HelperTextItem variant={timeoutValid ? 'default' : 'error'}>
+                        How long each Attempt may run before it is stopped: 1 to 1440 minutes. A large codebase on a slow model needs hours.
+                      </HelperTextItem>
                     </HelperText>
                   </FormHelperText>
                 </FormGroup>

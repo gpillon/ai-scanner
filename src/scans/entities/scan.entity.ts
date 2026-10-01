@@ -38,6 +38,10 @@ export class Scan {
   @Column({ type: 'integer', default: 0 })
   attempts: number;
 
+  /** Minutes each Attempt may run, as the caller chose; null: the server setting. */
+  @Column({ type: 'integer', nullable: true })
+  attemptTimeoutMinutes: number | null;
+
   @Column({ type: 'text' })
   createdAt: string;
 

@@ -266,6 +266,12 @@ export function ScanDetailPage({ id, tab }: { id: string; tab: ScanTab }) {
                               <DescriptionListTerm>Attempts</DescriptionListTerm>
                               <DescriptionListDescription>{scan.attempts}</DescriptionListDescription>
                             </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Attempt timeout</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                {scan.attemptTimeoutMinutes ? `${scan.attemptTimeoutMinutes} min` : 'Server default'}
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
                             {scan.usage && (
                               <DescriptionListGroup>
                                 <DescriptionListTerm>Tokens</DescriptionListTerm>

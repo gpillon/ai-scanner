@@ -60,11 +60,12 @@ export class ScansController {
         model: { type: 'string' },
         language: { type: 'string' },
         instructions: { type: 'string' },
+        attemptTimeoutMinutes: { type: 'integer', minimum: 1, maximum: 1440, description: 'Minutes each Attempt may run; the server setting otherwise' },
       },
     },
   })
   @ApiCreatedResponse({ type: ScanStatusDto, description: 'Scan accepted, in state `queued`' })
-  @ApiBadRequestResponse({ description: 'Invalid id, archive, profile, model, language or instructions' })
+  @ApiBadRequestResponse({ description: 'Invalid id, archive, profile, model, language, instructions or Attempt timeout' })
   @ApiConflictResponse({ description: 'A Scan with this id already exists' })
   async create(@Param('id') id: string, @Body() body: CreateScanDto, @Req() req: { file?: { path: string } }) {
     const scan = await this.scans.create({ id, archivePath: req.file?.path, ...body });

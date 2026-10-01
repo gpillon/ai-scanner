@@ -314,6 +314,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
             agentModel,
             egress,
             modelEgress,
+            attemptTimeoutMs: scan.attemptTimeoutMinutes ? scan.attemptTimeoutMinutes * MINUTE_MS : this.config.attemptTimeoutMs,
           },
           scanTimer,
         );
@@ -371,7 +372,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
 
   /** Runs one Attempt, stopping it when it or the Scan times out. */
   private async runAttempt(request: AttemptRequest, scanTimer: Timer): Promise<AttemptEnd> {
-    const attemptTimer = this.clock.timer(this.config.attemptTimeoutMs);
+    const attemptTimer = this.clock.timer(request.attemptTimeoutMs);
     try {
       // Called synchronously from the caller's last `lettingGo` check: see Runner.stop.
       const run = (async () => this.runner.run(request))().then(
@@ -390,7 +391,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
       await run;
       return end === 'scan-timeout'
         ? end
-        : { problem: `the Attempt timed out after ${minutes(this.config.attemptTimeoutMs)}` };
+        : { problem: `the Attempt timed out after ${minutes(request.attemptTimeoutMs)}` };
     } finally {
       attemptTimer.cancel();
     }
