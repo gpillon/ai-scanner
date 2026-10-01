@@ -171,7 +171,7 @@ const waitForContainer = (scanId: string) =>
 
     it('lists the Model Pool with its Default Model, and uses the Default Model when none is requested', async () => {
       const models = (await s.server.request('GET', '/api/models')).body;
-      expect(models).toEqual(pool.map((m) => ({ id: m.id, provider: m.provider, default: m.id === defaultModel, options: expect.any(Array) })));
+      expect(models).toEqual(pool.map((m) => ({ id: m.id, provider: m.provider, default: m.id === defaultModel })));
       const reply = await s.server.submit('default-model', { profile: 'security', instructions: HANG }, SOURCE);
       expect(reply.status).toBe(201);
       expect(reply.body.model).toBe(defaultModel);

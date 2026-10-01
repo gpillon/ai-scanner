@@ -1,7 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsArray, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
-import { THINKING_LEVELS, ThinkingLevel } from '../../models/model-options';
+import { IsArray, IsInt, IsNotEmpty, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
 
 const emptyToUndefined = () => Transform(({ value }) => (value === '' ? undefined : value));
 
@@ -17,26 +16,6 @@ export class CreateScanDto {
   @IsOptional()
   @IsString()
   model?: string;
-
-  @ApiPropertyOptional({
-    enum: ['on', 'off'],
-    description:
-      "Model option: whether the model thinks (reasons) before answering. Left out: the model's own behaviour, and nothing is sent. " +
-      "Taken by models of the anthropic, openai and openai-compatible provider kinds; a model that cannot honour it fails the Attempt with the provider's message.",
-  })
-  @emptyToUndefined()
-  @IsOptional()
-  @IsIn(['on', 'off'], { message: 'thinking must be "on" or "off"' })
-  thinking?: 'on' | 'off';
-
-  @ApiPropertyOptional({
-    enum: THINKING_LEVELS,
-    description: "Model option, with thinking=on: how much the model thinks. Left out: the model's own level.",
-  })
-  @emptyToUndefined()
-  @IsOptional()
-  @IsIn(THINKING_LEVELS, { message: `thinkingLevel must be one of: ${THINKING_LEVELS.join(', ')}` })
-  thinkingLevel?: ThinkingLevel;
 
   @ApiPropertyOptional({ description: 'Report language code, e.g. `en`, `it`. Defaults to the server default.' })
   @emptyToUndefined()

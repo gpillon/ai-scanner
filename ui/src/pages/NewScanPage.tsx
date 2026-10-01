@@ -25,7 +25,7 @@ import {
 } from '@patternfly/react-core';
 import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, SCAN_ID_PATTERN, THINKING_LEVELS, type Model, type ModelOptions, type Profile, type SkillPack, type ThinkingLevel } from '../api';
+import { api, SCAN_ID_PATTERN, type Model, type Profile, type SkillPack } from '../api';
 import { emptyGitSource, GitSourceFields, type GitSourceValue } from '../components/GitSourceFields';
 import { TagSelect } from '../components/TagSelect';
 import { navigate, scanRoute } from '../router';
@@ -41,9 +41,6 @@ export function NewScanPage() {
   const [id, setId] = useState(newScanId);
   const [profile, setProfile] = useState('');
   const [model, setModel] = useState('');
-  // '': the model's own behaviour, and nothing is sent.
-  const [thinking, setThinking] = useState<'' | 'on' | 'off'>('');
-  const [thinkingLevel, setThinkingLevel] = useState<'' | ThinkingLevel>('');
   const [language, setLanguage] = useState('');
   const [instructions, setInstructions] = useState('');
   const [timeout, setTimeoutMinutes] = useState('');
@@ -75,12 +72,6 @@ export function NewScanPage() {
   const timeoutValid = timeout.trim() === '' || (/^\d+$/.test(timeout.trim()) && +timeout >= 1 && +timeout <= 1440);
   const canSubmit = idValid && Boolean(profile) && hasSource && timeoutValid && !submitting;
   const selectedProfile = profiles?.find((p) => p.name === profile);
-  // Offered only for models whose provider takes it; a choice made for another model is not sent.
-  const takesThinking = Boolean(models?.find((m) => m.id === model)?.options?.includes('thinking'));
-  const modelOptions: ModelOptions | undefined =
-    takesThinking && thinking
-      ? { thinking, ...(thinking === 'on' && thinkingLevel && { thinkingLevel }) }
-      : undefined;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -101,7 +92,6 @@ export function NewScanPage() {
             }),
         profile,
         model,
-        modelOptions,
         language: language.trim(),
         instructions: instructions.trim(),
         skillPacks: chosenPacks,
@@ -227,52 +217,6 @@ export function NewScanPage() {
                     ))}
                   </FormSelect>
                 </FormGroup>
-
-                {takesThinking && (
-                  <FormGroup label="Thinking" fieldId="thinking" role="radiogroup">
-                    <ToggleGroup aria-label="Thinking">
-                      {([['', 'Model default'], ['on', 'On'], ['off', 'Off']] as const).map(([value, text]) => (
-                        <ToggleGroupItem
-                          key={value || 'default'}
-                          text={text}
-                          buttonId={`thinking-${value || 'default'}`}
-                          isSelected={thinking === value}
-                          onChange={() => setThinking(value)}
-                          isDisabled={submitting}
-                        />
-                      ))}
-                    </ToggleGroup>
-                    <FormHelperText>
-                      <HelperText>
-                        <HelperTextItem>
-                          Whether the model reasons before answering. Model default sends nothing; a model that cannot do what is
-                          chosen fails its Attempts with the provider's message.
-                        </HelperTextItem>
-                      </HelperText>
-                    </FormHelperText>
-                  </FormGroup>
-                )}
-
-                {takesThinking && thinking === 'on' && (
-                  <FormGroup label="Thinking level" fieldId="thinking-level">
-                    <FormSelect
-                      id="thinking-level"
-                      value={thinkingLevel}
-                      onChange={(_e, v) => setThinkingLevel(v as '' | ThinkingLevel)}
-                      isDisabled={submitting}
-                    >
-                      <FormSelectOption value="" label="Model default" />
-                      {THINKING_LEVELS.map((l) => (
-                        <FormSelectOption key={l} value={l} label={l[0].toUpperCase() + l.slice(1)} />
-                      ))}
-                    </FormSelect>
-                    <FormHelperText>
-                      <HelperText>
-                        <HelperTextItem>How much the model thinks. Some OpenAI-compatible servers, e.g. Qwen3 on vLLM, have no levels and ignore it.</HelperTextItem>
-                      </HelperText>
-                    </FormHelperText>
-                  </FormGroup>
-                )}
 
                 <FormGroup label="Report language" fieldId="language">
                   <TextInput

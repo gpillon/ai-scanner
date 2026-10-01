@@ -49,7 +49,7 @@ curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/profiles
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/models
 
 curl -H "Authorization: Bearer $TOKEN" -F file=@code.zip -F profile=security \
-     -F model=qwen3.8-27b -F thinking=on -F thinkingLevel=high \
+     -F model=qwen3.8-27b \
      -F language=en -F instructions="Focus on the payment module" \
      -F skillPacks=java,frontend -F attemptTimeoutMinutes=240 \
      localhost:3000/api/scan/$ID
@@ -73,8 +73,6 @@ curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:3000/api/scan/$ID  # 
 
 A **Git repository** can replace the zip ([ADR-0010](docs/adr/0010-scan-a-git-repository.md)). The server checks out one commit of `ref` (or the default branch) while answering the POST, and keeps it with the Scan. Credentials, for a private repository, are used for that one fetch and never stored. Prefer a read-only token; GitHub and GitLab accept it with any username, `oauth2` by default. Only https is used, symlinks arrive as plain files, Git LFS objects are not fetched, and loopback and link-local hosts are refused. Set `SCANNER_GIT_HOSTS` to restrict the hosts, since any holder of the caller token can make the server fetch from your internal network. The New Scan form offers the same, with a button that lists the repository's branches and tags.
 
-**Model options** set how the model runs, next to `model` ([ADR-0013](docs/adr/0013-model-options-chosen-per-scan.md)): `thinking` (`on` or `off`) and, with `on`, `thinkingLevel` (`low`, `medium` or `high`). Left out, the model keeps its own behaviour and nothing is sent. The server maps them to the Provider's kind: `chat_template_kwargs.enable_thinking` and `reasoning_effort` for `openai-compatible` (vLLM and SGLang serving Qwen3 and alike), reasoning effort for `openai`, adaptive thinking and effort for `anthropic`; other kinds refuse them with `400`. A model that cannot do what was chosen fails its Attempts with the provider's message. `GET /api/models` lists the options each model takes, `GET /api/scan/<id>` returns the Scan's as `modelOptions`, and the New Scan form offers them under the model.
-
 `GET /api/scan/<id>` gives the tokens the agent used as `usage`, once an Attempt has reported it ([ADR-0011](docs/adr/0011-parallel-reviewers-and-token-usage.md)). The counts are summed over the Attempts and include every subagent: `input`, `output`, `reasoning`, `cacheRead`, `cacheWrite`, `total`, the `cost` the provider reports (0 when it reports none), and the number of agent `sessions`. They are never in the Report or the Findings. The UI shows them in the Scan's Overview.
 
 The OpenAPI document is at `/api/openapi.json`, and `/api/docs` renders it. Neither requires the token.
@@ -96,7 +94,14 @@ In production the backend serves the built UI as static files under `/ui/`, and 
 Scans run on the models of the Model Pool, served by Providers ([ADR-0006](docs/adr/0006-model-pool-in-the-database-managed-by-an-admin.md)). Both live in the database. Sign in with `SCANNER_ADMIN_TOKEN` and the menu gains an Administration group:
 
 - **Providers**: add an LLM API. Its kind is `anthropic`, `openai`, `google`, `mistral`, `groq`, `xai`, `openrouter`, or `openai-compatible` for vLLM, LM Studio, Ollama and any other OpenAI-style API, which needs a base URL. An API key typed here is stored encrypted under `SCANNER_SECRET_KEY` and never shown again. Without one, the kind's usual variable (e.g. `ANTHROPIC_API_KEY`) is read from the server's environment.
-- **Models**: pick a Provider, and the server asks its API which models it offers. Add the ones Scans may use, enable or disable them, and choose the Default Model.
+- **Models**: pick a Provider, and the server asks its API which models it offers. Add the ones Scans may use, enable or disable them, choose the Default Model, and set how each one thinks.
+
+**Thinking** is a model option, set per model by the admin, never by a Scan ([ADR-0013](docs/adr/0013-model-options-set-per-model.md)): `thinking` (`on` or `off`) and, with `on`, `thinkingLevel` (`low`, `medium`, `high`, `xhigh` or `max`), on `POST /api/admin/models` or `PATCH /api/admin/models/<id>`. There a `thinking` given replaces the level too, and `null` goes back to the model's own behaviour. Left unset, the model keeps its own behaviour and nothing is sent. The server maps them to the Provider's kind: `chat_template_kwargs.enable_thinking` and `reasoning_effort` for `openai-compatible` (vLLM and SGLang serving Qwen3 and alike), reasoning effort for `openai`, adaptive thinking and effort for `anthropic`; other kinds refuse them with `400`. A model that cannot do what is set (OpenAI has no `max`, Claude models before Opus 4.7 no `xhigh`) fails its Attempts with the provider's message. A change applies from the next Attempt, of running Scans too.
+
+```sh
+curl -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' -X PATCH \
+     -d '{"thinking":"on","thinkingLevel":"high"}' localhost:3000/api/admin/models/qwen3.8-27b
+```
 
 Agents may reach every Provider that serves a model, and nothing else. The egress proxy picks changes up without a restart. A disabled model still serves the Scans already using it. `SCANNER_MODELS` only fills an empty database on its first start: after that, edits to it are ignored.
 

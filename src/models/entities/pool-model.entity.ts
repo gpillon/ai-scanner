@@ -1,4 +1,5 @@
 import { Column, Entity, PrimaryColumn } from 'typeorm';
+import type { ModelOptions } from '../model-options';
 
 /** A model of the Model Pool: a model a Provider serves, under the id Scans name it by. */
 @Entity('models')
@@ -21,6 +22,10 @@ export class PoolModel {
   /** The Default Model: at most one. */
   @Column({ type: 'boolean', default: false })
   isDefault: boolean;
+
+  /** How the model runs, e.g. its thinking (ADR-0013); null: the model's own way. */
+  @Column({ type: 'simple-json', nullable: true })
+  modelOptions: ModelOptions | null;
 
   /** Listing order. */
   @Column({ type: 'integer' })

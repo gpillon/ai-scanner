@@ -8,8 +8,6 @@ export interface ScanStatus {
   state: ScanState;
   profile: string;
   model: string;
-  /** How the caller asked the model to run, when it chose to (ADR-0013). */
-  modelOptions?: ModelOptions;
   language: string;
   attempts: number;
   /** Minutes each Attempt may run, when the caller chose it; absent: the server setting. */
@@ -27,10 +25,10 @@ export interface ScanStatus {
   usage?: TokenUsage;
 }
 
-export const THINKING_LEVELS = ['low', 'medium', 'high'] as const;
+export const THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
-/** How a Scan asks its model to run; a field left out is the model's own behaviour. */
+/** How a model of the pool runs, as the admin set it (ADR-0013); a field left out is the model's own behaviour. */
 export interface ModelOptions {
   thinking?: 'on' | 'off';
   /** With thinking on. */
@@ -60,8 +58,6 @@ export interface Model {
   id: string;
   provider: string;
   default: boolean;
-  /** The model options a Scan may set for it, e.g. `thinking`; absent from older servers. */
-  options?: (keyof ModelOptions)[];
 }
 
 /** Credentials of a private Git repository: kept in the form only, sent with each request. */
@@ -83,7 +79,6 @@ export interface NewScan {
   repo?: { url: string; ref?: string; credentials?: GitCredentials };
   profile: string;
   model?: string;
-  modelOptions?: ModelOptions;
   language?: string;
   instructions?: string;
   skillPacks?: string[];
@@ -199,19 +194,29 @@ export interface DiscoveredModel {
   inPool?: string;
 }
 
-export interface AdminModel {
+export interface AdminModel extends ModelOptions {
   id: string;
   provider: string;
   name: string;
   enabled: boolean;
   default: boolean;
+  /** The model options its Provider's kind takes, e.g. `thinking`; absent from older servers. */
+  options?: (keyof ModelOptions)[];
 }
 
-export interface NewModel {
+export interface NewModel extends ModelOptions {
   provider: string;
   name: string;
   id?: string;
   default?: boolean;
+}
+
+/** A change to a model of the pool; a thinking given replaces the level too, `null` is the model's own behaviour. */
+export interface ModelChange {
+  enabled?: boolean;
+  default?: boolean;
+  thinking?: 'on' | 'off' | null;
+  thinkingLevel?: ThinkingLevel | null;
 }
 
 /** A skill of the Skill Library (ADR-0008). */
@@ -257,8 +262,6 @@ export const api = {
     const form = new FormData();
     form.append('profile', scan.profile);
     if (scan.model) form.append('model', scan.model);
-    if (scan.modelOptions?.thinking) form.append('thinking', scan.modelOptions.thinking);
-    if (scan.modelOptions?.thinkingLevel) form.append('thinkingLevel', scan.modelOptions.thinkingLevel);
     if (scan.language) form.append('language', scan.language);
     if (scan.instructions) form.append('instructions', scan.instructions);
     if (scan.attemptTimeoutMinutes) form.append('attemptTimeoutMinutes', String(scan.attemptTimeoutMinutes));
@@ -303,7 +306,7 @@ export const api = {
 
   createModel: async (input: NewModel): Promise<AdminModel> => (await send('POST', '/api/admin/models', input)).json(),
 
-  updateModel: async (id: string, change: { enabled?: boolean; default?: boolean }): Promise<AdminModel> =>
+  updateModel: async (id: string, change: ModelChange): Promise<AdminModel> =>
     (await send('PATCH', `/api/admin/models/${encodeURIComponent(id)}`, change)).json(),
 
   async deleteModel(id: string): Promise<void> {

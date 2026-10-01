@@ -34,7 +34,7 @@ describe('Agent configuration', () => {
   });
 });
 
-/** The Scan's model options reach opencode as the model's own options (ADR-0013). */
+/** A model's options reach opencode as the model's own options (ADR-0013). */
 describe('Model options in the agent configuration', () => {
   type Providers = { provider: Record<string, { models?: Record<string, { options?: object; tool_call?: boolean }> }> };
   const thinkingOff = { chat_template_kwargs: { enable_thinking: false } };
@@ -67,13 +67,17 @@ describe('Model options per provider kind', () => {
     ['openai', { thinking: 'off' }, { reasoningEffort: 'none' }],
     ['anthropic', { thinking: 'on' }, { thinking: { type: 'adaptive' } }],
     ['anthropic', { thinking: 'on', thinkingLevel: 'high' }, { thinking: { type: 'adaptive' }, effort: 'high' }],
+    ['anthropic', { thinking: 'on', thinkingLevel: 'xhigh' }, { thinking: { type: 'adaptive' }, effort: 'xhigh' }],
+    ['anthropic', { thinking: 'on', thinkingLevel: 'max' }, { thinking: { type: 'adaptive' }, effort: 'max' }],
+    ['openai', { thinking: 'on', thinkingLevel: 'xhigh' }, { reasoningEffort: 'xhigh' }],
+    ['openai-compatible', { thinking: 'on', thinkingLevel: 'max' }, { chat_template_kwargs: { enable_thinking: true }, reasoningEffort: 'max' }],
     ['anthropic', { thinking: 'off' }, { thinking: { type: 'disabled' } }],
   ] as [ProviderKind, ModelOptions, object][])('%s, %j: %j', (kind, choice, sent) => {
     expect(unsupportedModelOptions(kind, choice)).toBeUndefined();
     expect(opencodeModelOptions(kind, choice)).toEqual(sent);
   });
 
-  it('sends nothing when the Scan chose nothing', () => {
+  it('sends nothing when the model has none set', () => {
     for (const kind of PROVIDER_KINDS) expect(opencodeModelOptions(kind, null)).toEqual({});
   });
 

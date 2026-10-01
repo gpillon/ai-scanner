@@ -1,5 +1,4 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import type { ModelOptions } from '../../models/model-options';
 import { TokenUsage } from '../../runner/usage';
 import { Scan, ScanSource, ScanState } from '../entities/scan.entity';
 
@@ -8,11 +7,6 @@ export class ScanStatusDto {
   @ApiProperty({ enum: ['queued', 'warming', 'running', 'succeeded', 'failed'] }) state: ScanState;
   @ApiProperty() profile: string;
   @ApiProperty() model: string;
-  @ApiPropertyOptional({
-    description: "How the caller asked the model to run, when it chose to; the model's own way otherwise",
-    example: { thinking: 'on', thinkingLevel: 'high' },
-  })
-  modelOptions?: ModelOptions;
   @ApiProperty() language: string;
   @ApiProperty({ description: 'Number of Attempts made so far' }) attempts: number;
   @ApiPropertyOptional({ description: 'Minutes each Attempt may run, when the caller chose it; the server setting otherwise' })
@@ -46,7 +40,6 @@ export class ScanStatusDto {
       state: scan.state,
       profile: scan.profile,
       model: scan.model,
-      ...(scan.modelOptions && { modelOptions: scan.modelOptions }),
       language: scan.language,
       attempts: scan.attempts,
       ...(scan.attemptTimeoutMinutes && { attemptTimeoutMinutes: scan.attemptTimeoutMinutes }),

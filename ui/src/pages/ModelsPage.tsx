@@ -19,11 +19,23 @@ import CubesIcon from '@patternfly/react-icons/dist/esm/icons/cubes-icon';
 import StarIcon from '@patternfly/react-icons/dist/esm/icons/star-icon';
 import { ActionsColumn, Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { useCallback, useEffect, useState } from 'react';
-import { api, type AdminModel, type Provider } from '../api';
+import { api, THINKING_LEVELS, type AdminModel, type ModelChange, type Provider, type ThinkingLevel } from '../api';
 import { DiscoverModelsModal } from '../components/DiscoverModelsModal';
 import { href } from '../router';
 
-/** The Model Pool: what callers may run Scans with, and the Default Model. */
+/** A model's thinking as one choice: '' is the model's own behaviour, `on:<level>` thinking at that level. */
+const thinkingChoice = (m: AdminModel) => (m.thinking === 'on' && m.thinkingLevel ? `on:${m.thinkingLevel}` : (m.thinking ?? ''));
+
+/** The change that sets a thinking choice; a thinking given replaces the level too. */
+function thinkingChange(choice: string): ModelChange {
+  if (!choice) return { thinking: null };
+  const [thinking, level] = choice.split(':') as ['on' | 'off', ThinkingLevel | undefined];
+  return { thinking, ...(level && { thinkingLevel: level }) };
+}
+
+const capitalized = (s: string) => s[0].toUpperCase() + s.slice(1);
+
+/** The Model Pool: what callers may run Scans with, the Default Model, and how each model thinks. */
 export function ModelsPage() {
   const [models, setModels] = useState<AdminModel[]>();
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -60,7 +72,8 @@ export function ModelsPage() {
           <Title headingLevel="h1">Models</Title>
           <p>
             The Model Pool. Callers choose among the enabled models; the Default Model <StarIcon className="app-default-star" /> runs when they
-            choose none.
+            choose none. Thinking sets whether a model reasons before answering, for every Scan using it from its next Attempt; Model default
+            sends nothing, and a model that cannot do what is set fails its Attempts with the provider's message.
           </p>
         </Content>
       </PageSection>
@@ -108,6 +121,7 @@ export function ModelsPage() {
                 <Th>Id</Th>
                 <Th>Provider</Th>
                 <Th>Name at the Provider</Th>
+                <Th>Thinking</Th>
                 <Th>Enabled</Th>
                 <Th screenReaderText="Actions" />
               </Tr>
@@ -122,6 +136,25 @@ export function ModelsPage() {
                   <Td dataLabel="Provider">{m.provider}</Td>
                   <Td dataLabel="Name">
                     <code>{m.name}</code>
+                  </Td>
+                  <Td dataLabel="Thinking">
+                    {m.options?.includes('thinking') ? (
+                      <FormSelect
+                        id={`thinking-${m.id}`}
+                        aria-label={`${m.id} thinking`}
+                        value={thinkingChoice(m)}
+                        onChange={(_e, v) => change(() => api.updateModel(m.id, thinkingChange(v)))}
+                      >
+                        <FormSelectOption value="" label="Model default" />
+                        <FormSelectOption value="off" label="Off" />
+                        <FormSelectOption value="on" label="On, model's level" />
+                        {THINKING_LEVELS.map((l) => (
+                          <FormSelectOption key={l} value={`on:${l}`} label={`On, ${capitalized(l)}`} />
+                        ))}
+                      </FormSelect>
+                    ) : (
+                      <span className="pf-v6-u-color-200">Model default</span>
+                    )}
                   </Td>
                   <Td dataLabel="Enabled">
                     <Switch

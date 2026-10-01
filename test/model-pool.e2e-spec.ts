@@ -49,8 +49,8 @@ describe('Model Pool administration', () => {
         ['openai-compatible', 'openai-compatible'],
       ]);
       expect((await h.admin.get('/api/admin/models')).body).toEqual([
-        { id: 'fast-model', provider: 'openai-compatible', name: 'fast-model', enabled: true, default: true },
-        { id: 'deep-model', provider: 'anthropic', name: 'deep-model', enabled: true, default: false },
+        { id: 'fast-model', provider: 'openai-compatible', name: 'fast-model', enabled: true, default: true, options: ['thinking', 'thinkingLevel'] },
+        { id: 'deep-model', provider: 'anthropic', name: 'deep-model', enabled: true, default: false, options: ['thinking', 'thinkingLevel'] },
       ]);
     });
 
@@ -157,8 +157,8 @@ describe('Model Pool administration', () => {
       h = await startApp();
       expect((await h.admin.patch('/api/admin/models/deep-model').send({ default: true })).body).toMatchObject({ default: true });
       expect((await h.api.get('/api/models')).body).toEqual([
-        { id: 'fast-model', provider: 'openai-compatible', default: false, options: ['thinking', 'thinkingLevel'] },
-        { id: 'deep-model', provider: 'anthropic', default: true, options: ['thinking', 'thinkingLevel'] },
+        { id: 'fast-model', provider: 'openai-compatible', default: false },
+        { id: 'deep-model', provider: 'anthropic', default: true },
       ]);
       await h.admin.patch('/api/admin/models/fast-model').send({ enabled: false });
       expect((await h.api.get('/api/models')).body.map((m: any) => m.id)).toEqual(['deep-model']);
@@ -226,6 +226,78 @@ describe('Model Pool administration', () => {
       const status = await h.waitForState('s1', 'failed');
       expect(status.failureReason).toMatch(/cannot be decrypted/);
       expect(h.runner.calls).toHaveLength(0);
+    });
+  });
+
+  /** Thinking is the admin's to set, per model (ADR-0013). */
+  describe('model options', () => {
+    it('are set when adding a model, and edited later', async () => {
+      h = await startApp();
+      await h.admin.post('/api/admin/providers').send({ id: 'work', kind: 'anthropic' });
+      const created = await h.admin.post('/api/admin/models').send({ provider: 'work', name: 'claude-x', thinking: 'on', thinkingLevel: 'xhigh' });
+      expect(created.status).toBe(201);
+      expect(created.body).toMatchObject({ thinking: 'on', thinkingLevel: 'xhigh', options: ['thinking', 'thinkingLevel'] });
+
+      // A level alone keeps thinking on.
+      expect((await h.admin.patch('/api/admin/models/claude-x').send({ thinkingLevel: 'max' })).body).toMatchObject({ thinking: 'on', thinkingLevel: 'max' });
+      // A thinking given replaces the level too.
+      const off = (await h.admin.patch('/api/admin/models/claude-x').send({ thinking: 'off' })).body;
+      expect(off).toMatchObject({ thinking: 'off' });
+      expect(off).not.toHaveProperty('thinkingLevel');
+      // Other changes leave it alone.
+      expect((await h.admin.patch('/api/admin/models/claude-x').send({ enabled: false })).body).toMatchObject({ enabled: false, thinking: 'off' });
+      const reset = (await h.admin.patch('/api/admin/models/claude-x').send({ thinking: null })).body;
+      expect(reset).not.toHaveProperty('thinking');
+      expect((await h.admin.get('/api/admin/models')).body.find((m: any) => m.id === 'claude-x')).not.toHaveProperty('thinking');
+    });
+
+    it('reach the agent in the shape of the provider kind, from the next Attempt', async () => {
+      h = await startApp();
+      await h.admin.patch('/api/admin/models/fast-model').send({ thinking: 'off' });
+      await h.submit('s1');
+      await h.waitForState('s1', 'succeeded');
+      // fast-model is openai-compatible: the chat template switch of Qwen3, sent as is.
+      expect(h.runner.calls[0].agentModel.options).toEqual({ chat_template_kwargs: { enable_thinking: false } });
+
+      await h.admin.patch('/api/admin/models/deep-model').send({ thinking: 'on', thinkingLevel: 'high' });
+      await h.submit('s2', { profile: 'security', model: 'deep-model' });
+      await h.waitForState('s2', 'succeeded');
+      expect(h.runner.calls[1].agentModel.options).toEqual({ thinking: { type: 'adaptive' }, effort: 'high' });
+    });
+
+    it('leave the behaviour of the model alone when unset', async () => {
+      h = await startApp();
+      await h.submit('s1');
+      await h.waitForState('s1', 'succeeded');
+      expect(h.runner.calls[0].agentModel).not.toHaveProperty('options');
+    });
+
+    it('are refused with 400 when invalid, a level goes without thinking on, or the kind cannot take them', async () => {
+      h = await startApp();
+      const invalid: Record<string, unknown>[] = [
+        { thinking: 'yes' },
+        { thinking: 'on', thinkingLevel: 'extreme' },
+        { thinkingLevel: 'low' },
+        { thinking: 'off', thinkingLevel: 'low' },
+      ];
+      for (const fields of invalid) expect((await h.admin.patch('/api/admin/models/fast-model').send(fields)).status).toBe(400);
+      expect((await h.admin.post('/api/admin/models').send({ provider: 'openai-compatible', name: 'q', thinkingLevel: 'low' })).status).toBe(400);
+
+      await h.admin.post('/api/admin/providers').send({ id: 'gemini', kind: 'google' });
+      expect((await h.admin.post('/api/admin/models').send({ provider: 'gemini', name: 'g', thinking: 'on' })).status).toBe(400);
+      expect((await h.admin.post('/api/admin/models').send({ provider: 'gemini', name: 'g' })).body.options).toEqual([]);
+      const google = await h.admin.patch('/api/admin/models/g').send({ thinking: 'on' });
+      expect(google.status).toBe(400);
+      expect(google.body.message).toMatch(/google takes no thinking options/);
+    });
+
+    it('are not taken from a Scan', async () => {
+      h = await startApp();
+      const res = await h.submit('s1', { profile: 'security', thinking: 'off', thinkingLevel: 'low' });
+      expect(res.status).toBe(201);
+      expect(res.body).not.toHaveProperty('modelOptions');
+      await h.waitForState('s1', 'succeeded');
+      expect(h.runner.calls[0].agentModel).not.toHaveProperty('options');
     });
   });
 });

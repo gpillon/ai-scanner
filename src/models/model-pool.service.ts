@@ -8,7 +8,7 @@ import { Scan } from '../scans/entities/scan.entity';
 import { PoolModel } from './entities/pool-model.entity';
 import { PoolSeed } from './entities/pool-seed.entity';
 import { Provider } from './entities/provider.entity';
-import { ModelOptions, modelOptionsOf, opencodeModelOptions } from './model-options';
+import { ModelOptions, opencodeModelOptions, ThinkingLevel, unsupportedModelOptions } from './model-options';
 import { endpointOf, isBuiltInKind, KIND_INFO, ProviderKind } from './provider-kinds';
 import { ProvidersService } from './providers.service';
 
@@ -22,11 +22,27 @@ export interface ModelInput {
   id?: string;
   enabled?: boolean;
   default?: boolean;
+  /** Model options: see ModelOptions. */
+  thinking?: 'on' | 'off';
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface ModelChange {
   enabled?: boolean;
   default?: boolean;
+  /** Given, replaces the thinking level too; null: the model's own behaviour. */
+  thinking?: 'on' | 'off' | null;
+  /** Null: the model's own level. */
+  thinkingLevel?: ThinkingLevel | null;
+}
+
+/** Model options without the fields left to the model, or null when none is left. */
+function compact(options: { thinking?: 'on' | 'off' | null; thinkingLevel?: ThinkingLevel | null }): ModelOptions | null {
+  const kept: ModelOptions = {
+    ...(options.thinking && { thinking: options.thinking }),
+    ...(options.thinkingLevel && { thinkingLevel: options.thinkingLevel }),
+  };
+  return Object.keys(kept).length ? kept : null;
 }
 
 /**
@@ -91,13 +107,9 @@ export class ModelPool implements OnModuleInit {
   }
 
   /** What callers may choose from: the enabled models, with the Default Model marked. */
-  async list(): Promise<{ id: string; provider: string; default: boolean; options: (keyof ModelOptions)[] }[]> {
+  async list(): Promise<{ id: string; provider: string; default: boolean }[]> {
     const models = await this.models.find({ where: { enabled: true }, order: { position: 'ASC' } });
-    const kinds = new Map((await this.providerRows.find()).map((p) => [p.id, p.kind]));
-    return models.map((m) => {
-      const kind = kinds.get(m.providerId);
-      return { id: m.id, provider: m.providerId, default: m.isDefault, options: kind ? modelOptionsOf(kind) : [] };
-    });
+    return models.map((m) => ({ id: m.id, provider: m.providerId, default: m.isDefault }));
   }
 
   /** The requested model, or the Default Model; undefined when that is not an enabled model. */
@@ -112,6 +124,11 @@ export class ModelPool implements OnModuleInit {
   /** Every model, enabled or not, for the admin. */
   all(): Promise<PoolModel[]> {
     return this.models.find({ order: { position: 'ASC' } });
+  }
+
+  /** The kind of every Provider, by id. */
+  async providerKinds(): Promise<Map<string, ProviderKind>> {
+    return new Map((await this.providerRows.find()).map((p) => [p.id, p.kind]));
   }
 
   async get(id: string): Promise<PoolModel> {
@@ -129,6 +146,9 @@ export class ModelPool implements OnModuleInit {
     const id = input.id?.trim() || name;
     if (!MODEL_ID_PATTERN.test(id)) throw new BadRequestException(`Not a valid model id: ${id}`);
     if (await this.models.existsBy({ id })) throw new ConflictException(`Model ${id} already exists`);
+    const modelOptions = compact(input);
+    const unsupported = modelOptions && unsupportedModelOptions(provider.kind, modelOptions);
+    if (unsupported) throw new BadRequestException(unsupported);
     const last = await this.models.find({ order: { position: 'DESC' }, take: 1 });
     const model = this.models.create({
       id,
@@ -136,6 +156,7 @@ export class ModelPool implements OnModuleInit {
       name,
       enabled: input.enabled ?? true,
       isDefault: false,
+      modelOptions,
       position: (last[0]?.position ?? -1) + 1,
       createdAt: this.clock.now().toISOString(),
     });
@@ -151,7 +172,13 @@ export class ModelPool implements OnModuleInit {
     if (model.isDefault && (change.enabled === false || change.default === false)) {
       throw new ConflictException(`${id} is the Default Model: make another model the default first`);
     }
+    const modelOptions = this.changedOptions(model, change);
+    if (modelOptions) {
+      const unsupported = unsupportedModelOptions((await this.providers.get(model.providerId)).kind, modelOptions);
+      if (unsupported) throw new BadRequestException(unsupported);
+    }
     await this.db.transaction(async (tx) => {
+      if (modelOptions !== undefined) await tx.update(PoolModel, { id }, { modelOptions });
       if (change.enabled !== undefined) await tx.update(PoolModel, { id }, { enabled: change.enabled });
       if (change.default === true) {
         await tx.update(PoolModel, { isDefault: true }, { isDefault: false });
@@ -161,6 +188,19 @@ export class ModelPool implements OnModuleInit {
       }
     });
     return this.get(id);
+  }
+
+  /**
+   * The model options after a change, or undefined when it changes none. A thinking given replaces
+   * the level too, so turning thinking off drops the level that went with it.
+   */
+  private changedOptions(model: PoolModel, change: ModelChange): ModelOptions | null | undefined {
+    if (change.thinking === undefined && change.thinkingLevel === undefined) return undefined;
+    return compact({
+      thinking: change.thinking === undefined ? model.modelOptions?.thinking : change.thinking,
+      thinkingLevel:
+        change.thinking === undefined && change.thinkingLevel === undefined ? model.modelOptions?.thinkingLevel : change.thinkingLevel,
+    });
   }
 
   /** Refused while a queued, warming or running Scan uses the model: its next Attempt would have none. */
@@ -175,17 +215,11 @@ export class ModelPool implements OnModuleInit {
     await this.models.delete(id);
   }
 
-  /** The kind of the Provider serving a model. */
-  async kindOf(id: string): Promise<ProviderKind> {
-    const model = await this.get(id);
-    return (await this.providers.get(model.providerId)).kind;
-  }
-
   /**
-   * How the agent reaches a model, run with the Scan's model options; whether or not it is
-   * enabled, since Scans may already use it.
+   * How the agent reaches a model, run with its model options; whether or not it is enabled,
+   * since Scans may already use it.
    */
-  async agentModel(id: string, modelOptions?: ModelOptions | null): Promise<AgentModel> {
+  async agentModel(id: string): Promise<AgentModel> {
     const model = await this.models.findOneBy({ id });
     if (!model) throw new Error(`Model ${id} is not in the Model Pool`);
     const provider = await this.providers.get(model.providerId);
@@ -193,7 +227,7 @@ export class ModelPool implements OnModuleInit {
     const apiKey = this.providers.storedKey(provider);
     // Without a stored key, the same variable discovery reads: the row's, else the kind's usual one.
     const apiKeyEnv = provider.apiKeyEnv ?? KIND_INFO[provider.kind].apiKeyEnv;
-    const options = opencodeModelOptions(provider.kind, modelOptions);
+    const options = opencodeModelOptions(provider.kind, model.modelOptions);
     return {
       provider: builtIn ? provider.kind : provider.id,
       builtIn,

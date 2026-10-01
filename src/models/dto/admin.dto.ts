@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, ValidateIf } from 'class-validator';
 import { PoolModel } from '../entities/pool-model.entity';
 import { Provider } from '../entities/provider.entity';
+import { ModelOptions, modelOptionsOf, THINKING_LEVELS, ThinkingLevel } from '../model-options';
 import { KIND_INFO, PROVIDER_KINDS, ProviderKind } from '../provider-kinds';
 
 export class ProviderKindDto {
@@ -104,11 +105,42 @@ export class CreateModelDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() enabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Make it the Default Model' }) @IsOptional() @IsBoolean() default?: boolean;
+
+  @ApiPropertyOptional({
+    enum: ['on', 'off'],
+    description:
+      "Model option: whether the model thinks (reasons) before answering. Left out: the model's own behaviour, and nothing is sent. " +
+      "Taken by models of the anthropic, openai and openai-compatible provider kinds; a model that cannot honour it fails its Attempts with the provider's message.",
+  })
+  @IsOptional()
+  @IsIn(['on', 'off'], { message: 'thinking must be "on" or "off"' })
+  thinking?: 'on' | 'off';
+
+  @ApiPropertyOptional({ enum: THINKING_LEVELS, description: "Model option, with thinking=on: how much the model thinks. Left out: the model's own level." })
+  @IsOptional()
+  @IsIn(THINKING_LEVELS, { message: `thinkingLevel must be one of: ${THINKING_LEVELS.join(', ')}` })
+  thinkingLevel?: ThinkingLevel;
 }
 
 export class UpdateModelDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() enabled?: boolean;
   @ApiPropertyOptional({ description: 'true makes it the Default Model' }) @IsOptional() @IsBoolean() default?: boolean;
+
+  @ApiPropertyOptional({
+    enum: ['on', 'off'],
+    nullable: true,
+    description: "Model option: whether the model thinks. Given, it replaces the thinking level too; `null` is the model's own behaviour",
+  })
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsIn(['on', 'off'], { message: 'thinking must be "on" or "off"' })
+  thinking?: 'on' | 'off' | null;
+
+  @ApiPropertyOptional({ enum: THINKING_LEVELS, nullable: true, description: "Model option, with thinking on: how much; `null` is the model's own level" })
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsIn(THINKING_LEVELS, { message: `thinkingLevel must be one of: ${THINKING_LEVELS.join(', ')}` })
+  thinkingLevel?: ThinkingLevel | null;
 }
 
 export class AdminModelDto {
@@ -117,8 +149,26 @@ export class AdminModelDto {
   @ApiProperty({ description: "The model's name at the Provider" }) name: string;
   @ApiProperty() enabled: boolean;
   @ApiProperty() default: boolean;
+  @ApiPropertyOptional({ enum: ['on', 'off'], description: "Whether the model thinks, when set; the model's own behaviour otherwise" })
+  thinking?: 'on' | 'off';
+  @ApiPropertyOptional({ enum: THINKING_LEVELS, description: "How much, when set with thinking on; the model's own level otherwise" })
+  thinkingLevel?: ThinkingLevel;
+  @ApiProperty({
+    type: [String],
+    description: "The model options its Provider's kind takes, e.g. thinking and thinkingLevel; empty when none",
+    example: ['thinking', 'thinkingLevel'],
+  })
+  options: (keyof ModelOptions)[];
 
-  static from(m: PoolModel): AdminModelDto {
-    return { id: m.id, provider: m.providerId, name: m.name, enabled: m.enabled, default: m.isDefault };
+  static from(m: PoolModel, kind: ProviderKind | undefined): AdminModelDto {
+    return {
+      id: m.id,
+      provider: m.providerId,
+      name: m.name,
+      enabled: m.enabled,
+      default: m.isDefault,
+      ...m.modelOptions,
+      options: kind ? modelOptionsOf(kind) : [],
+    };
   }
 }

@@ -51,8 +51,8 @@ describe('access and discovery', () => {
     const res = await h.api.get('/api/models');
     expect(res.status).toBe(200);
     expect(res.body).toEqual([
-      { id: 'fast-model', provider: 'openai-compatible', default: true, options: ['thinking', 'thinkingLevel'] },
-      { id: 'deep-model', provider: 'anthropic', default: false, options: ['thinking', 'thinkingLevel'] },
+      { id: 'fast-model', provider: 'openai-compatible', default: true },
+      { id: 'deep-model', provider: 'anthropic', default: false },
     ]);
   });
 

@@ -63,5 +63,5 @@ The Model Pool entry a Scan uses when the caller does not ask for a specific one
 _Avoid_: Fallback model
 
 **Model Options**:
-How a Scan asks its model to run, over the model's own defaults: first, whether it thinks and how much (ADR-0013). The Model Pool maps them to what the Provider's kind understands.
+How a model of the Model Pool runs, over its own defaults, as the admin set it: first, whether it thinks and how much (ADR-0013). The Model Pool maps them to what the Provider's kind understands; Scans do not choose them.
 _Avoid_: Model parameters, variant
