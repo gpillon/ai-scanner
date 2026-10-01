@@ -1,7 +1,8 @@
 import { Column, Entity, PrimaryColumn } from 'typeorm';
 import type { PackSnapshot } from '../../skills/skill-packs.service';
 
-export type ScanState = 'queued' | 'running' | 'succeeded' | 'failed';
+/** `warming`: waiting for the model to answer, before the first Attempt (ADR-0009). */
+export type ScanState = 'queued' | 'warming' | 'running' | 'succeeded' | 'failed';
 
 /** Timestamps are ISO-8601 strings so they sort and compare lexicographically. */
 @Entity('scans')

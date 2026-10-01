@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { appendFileSync, createReadStream } from 'node:fs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Repository } from 'typeorm';
@@ -14,6 +14,7 @@ import { ProfileRegistry, ScanProfile } from '../profiles/profile-registry.servi
 import { renderReportPdf } from '../reports/report-renderer';
 import { buildReportView, fillMarkdownTemplate, fillPdfTemplate } from '../reports/report-template';
 import { ModelPool } from '../models/model-pool.service';
+import { ModelUnusableError, ModelWarmup } from '../models/model-warmup.service';
 import { AgentModel, AttemptRequest, Runner } from '../runner/runner';
 import { Scan } from './entities/scan.entity';
 import { extractSourceArchive, InvalidSourceArchiveError } from './source-archive';
@@ -118,21 +119,25 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
   /** Queue passes run one at a time, so claims never race each other. */
   private pumping: Promise<void> = Promise.resolve();
   private shuttingDown = false;
+  /** Model warm-ups in progress, by Scan: deleting the Scan or stopping the server aborts them. */
+  private readonly warmups = new Map<string, AbortController>();
 
   constructor(
     @InjectRepository(Scan) private readonly scans: Repository<Scan>,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
     private readonly runner: Runner,
     private readonly pool: ModelPool,
+    private readonly warmup: ModelWarmup,
     private readonly store: ArtifactStore,
     private readonly profiles: ProfileRegistry,
     private readonly clock: Clock,
   ) {}
 
-  /** Scans left `running` by a restart are failed as interrupted; `queued` ones start again. */
+  /** Scans left `running` by a restart are failed as interrupted; `queued` and `warming` ones start again. */
   async onModuleInit(): Promise<void> {
     // Claimed just before the server stopped, but no Attempt ever started: still queued.
     await this.scans.update({ state: 'running', attempts: 0 }, { state: 'queued', startedAt: null });
+    await this.scans.update({ state: 'warming' }, { state: 'queued', startedAt: null });
     for (const { id } of await this.scans.find({ select: { id: true }, where: { state: 'running' } })) {
       await this.fail(id, 'Interrupted by a server restart');
     }
@@ -142,6 +147,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy(): Promise<void> {
     this.shuttingDown = true;
     await this.pumping;
+    for (const warming of this.warmups.values()) warming.abort();
     await Promise.all([...this.active.keys()].map((id) => this.runner.stop(id)));
     await Promise.all(this.active.values());
   }
@@ -177,6 +183,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
       await this.pumping; // a claim in flight has now either started the Scan or not
       const pending = this.active.get(id);
       if (pending) {
+        this.warmups.get(id)?.abort();
         await this.runner.stop(id);
         await pending;
       }
@@ -194,7 +201,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
       // Conditional on `queued`, so a Scan deleted meanwhile is never started.
       const claimed = await this.scans.update(
         { id, state: 'queued' },
-        { state: 'running', startedAt: this.clock.now().toISOString(), attempts: 0 },
+        { state: this.warmup.enabled ? 'warming' : 'running', startedAt: this.clock.now().toISOString(), attempts: 0 },
       );
       if (claimed.affected) this.start(id);
     }
@@ -251,6 +258,14 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
     }
     if (this.lettingGo(id)) return;
 
+    // The model answers first: no Attempt, pod or container starts before it does (ADR-0009).
+    if (this.warmup.enabled) {
+      if (!(await this.warmUp(scan))) return;
+      await this.scans.update({ id, state: 'warming' }, { state: 'running' });
+      if (this.lettingGo(id)) return;
+    }
+
+    // Counted from here: a long warm-up does not eat into the Attempts' time.
     const scanTimer = this.clock.timer(this.config.scanTimeoutMs);
     let scanTimedOut = false;
     void scanTimer.elapsed.then(() => (scanTimedOut = true));
@@ -311,6 +326,31 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
       await this.fail(id, `No valid Artifacts after ${this.config.maxAttempts} Attempts (last: ${problem})`);
     } finally {
       scanTimer.cancel();
+    }
+  }
+
+  /**
+   * Waits until the Scan's model answers a completion (ADR-0009). True when it did; otherwise
+   * the Scan has failed, or the supervisor is letting go of it. Each step goes to the Scan's
+   * warm-up log, which its activity stream shows.
+   */
+  private async warmUp(scan: Scan): Promise<boolean> {
+    const id = scan.id;
+    const controller = new AbortController();
+    this.warmups.set(id, controller);
+    const logPath = paths.warmupLog(this.config.dataDir, id);
+    const log = (text: string) => appendFileSync(logPath, JSON.stringify({ at: this.clock.now().toISOString(), text }) + '\n');
+    try {
+      await this.warmup.warm(await this.pool.agentModel(scan.model), controller.signal, log);
+      return !this.lettingGo(id);
+    } catch (e) {
+      if (this.lettingGo(id) || controller.signal.aborted) return false;
+      const reason = e instanceof ModelUnusableError ? e.message : (e as Error).message;
+      log(`Warm-up failed: ${reason}`);
+      await this.fail(id, `Model ${scan.model} is not usable: ${reason}`);
+      return false;
+    } finally {
+      this.warmups.delete(id);
     }
   }
 

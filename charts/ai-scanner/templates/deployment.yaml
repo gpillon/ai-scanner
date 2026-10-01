@@ -109,6 +109,8 @@ spec:
               value: {{ .Values.scanner.attemptTimeoutMinutes | quote }}
             - name: SCANNER_SCAN_TIMEOUT_MINUTES
               value: {{ .Values.scanner.scanTimeoutMinutes | quote }}
+            - name: SCANNER_WARMUP_TIMEOUT_MINUTES
+              value: {{ .Values.scanner.warmupTimeoutMinutes | quote }}
             - name: SCANNER_RETENTION_DAYS
               value: {{ .Values.scanner.retentionDays | quote }}
             - name: SCANNER_MAX_ARCHIVE_MB

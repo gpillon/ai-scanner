@@ -100,6 +100,13 @@ export interface AppConfig {
   attemptTimeoutMs: number;
   /** A Scan still running this long after it started is `failed`, even if Attempts remain. */
   scanTimeoutMs: number;
+  /**
+   * How long a Scan may wait for its model to answer a first completion before its first Attempt
+   * (ADR-0009): a scaled-to-zero model may take many minutes. 0 skips the warm-up.
+   */
+  warmupTimeoutMs: number;
+  /** First pause between warm-up tries; it doubles up to 30 s. */
+  warmupRetryMs: number;
   /** Scans running at once; the rest wait `queued`. */
   concurrency: number;
   /** 0 disables the periodic retention sweep. */
@@ -191,5 +198,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     attemptTimeoutMs: positive(env.SCANNER_ATTEMPT_TIMEOUT_MINUTES, 20) * MINUTE_MS,
     scanTimeoutMs: positive(env.SCANNER_SCAN_TIMEOUT_MINUTES, 60) * MINUTE_MS,
     concurrency: positiveInt(env.SCANNER_CONCURRENCY, 2),
+    warmupTimeoutMs: num(env.SCANNER_WARMUP_TIMEOUT_MINUTES, 30) * MINUTE_MS,
+    warmupRetryMs: 5000,
   };
 }

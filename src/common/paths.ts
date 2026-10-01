@@ -19,6 +19,8 @@ export const paths = {
   output: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'output'),
   /** `report.pdf` as rendered by the server, before it is stored as an Artifact. */
   renderedPdf: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'report.pdf'),
+  /** What the model warm-up did, one JSON line per step: the Scan's activity before Attempt 1. */
+  warmupLog: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'warmup.log'),
   transcript: (dataDir: string, id: string, attempt: number) =>
     join(dataDir, 'scans', id, 'attempts', String(attempt), 'transcript.log'),
 };

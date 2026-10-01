@@ -3,7 +3,7 @@ import { Scan, ScanState } from '../entities/scan.entity';
 
 export class ScanStatusDto {
   @ApiProperty() id: string;
-  @ApiProperty({ enum: ['queued', 'running', 'succeeded', 'failed'] }) state: ScanState;
+  @ApiProperty({ enum: ['queued', 'warming', 'running', 'succeeded', 'failed'] }) state: ScanState;
   @ApiProperty() profile: string;
   @ApiProperty() model: string;
   @ApiProperty() language: string;

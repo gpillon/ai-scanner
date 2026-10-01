@@ -158,14 +158,14 @@ export class ModelPool implements OnModuleInit {
     return this.get(id);
   }
 
-  /** Refused while a queued or running Scan uses the model: its next Attempt would have none. */
+  /** Refused while a queued, warming or running Scan uses the model: its next Attempt would have none. */
   async remove(id: string): Promise<void> {
     const model = await this.get(id);
     // Removing the last model is fine: then there is nothing left to be the default.
     if (model.isDefault && (await this.models.count()) > 1) {
       throw new ConflictException(`${id} is the Default Model: make another model the default first`);
     }
-    const active = await this.scans.countBy({ model: id, state: In(['queued', 'running']) });
+    const active = await this.scans.countBy({ model: id, state: In(['queued', 'warming', 'running']) });
     if (active) throw new ConflictException(`Model ${id} is used by ${active} queued or running Scan(s): disable it instead`);
     await this.models.delete(id);
   }

@@ -3,7 +3,7 @@ import { open } from 'node:fs/promises';
 import { Observable } from 'rxjs';
 import { paths } from '../common/paths';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
-import { summarise } from './activity';
+import { Activity, summarise } from './activity';
 import { ScanStatusDto } from './dto/scan-status.dto';
 import { ScansService } from './scans.service';
 
@@ -80,6 +80,8 @@ export class ScanEventsService {
   private async follow(id: string, emit: (type: string, data: object) => void, stopped: () => boolean): Promise<void> {
     let attempt = 0;
     let tail: LineTail | undefined;
+    // The model warm-up, before any Attempt (ADR-0009): shown as Attempt 0's `log` activity.
+    const warmup = new LineTail(paths.warmupLog(this.config.dataDir, id));
     let lastState = '';
     while (!stopped()) {
       let scan;
@@ -93,6 +95,10 @@ export class ScanEventsService {
       // Transcripts are complete before the state turns terminal: read the state first,
       // then every line written so far, and nothing is missed at the end.
       const finished = TERMINAL.has(scan.state);
+      for (const line of await warmup.read(finished || scan.attempts > 0)) {
+        const step = warmupStep(line);
+        if (step) emit('activity', step);
+      }
       for (;;) {
         const next = attempt + 1;
         const nextStarted = next <= scan.attempts;
@@ -117,5 +123,16 @@ export class ScanEventsService {
       if (finished) return;
       await sleep(EVENTS_POLL_MS);
     }
+  }
+}
+
+/** A line of the warm-up log as activity: `{"at": ..., "text": ...}`. */
+function warmupStep(line: string): Activity | undefined {
+  try {
+    const { at, text } = JSON.parse(line);
+    if (typeof text !== 'string') return undefined;
+    return { attempt: 0, at: typeof at === 'string' ? at : new Date().toISOString(), kind: 'log', text };
+  } catch {
+    return undefined;
   }
 }

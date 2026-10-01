@@ -134,6 +134,7 @@ Environment variables, read at startup. `.env.example` has a starting point.
 | `SCANNER_MAX_ATTEMPTS` | `3` | Attempts before a Scan fails |
 | `SCANNER_ATTEMPT_TIMEOUT_MINUTES` / `SCANNER_SCAN_TIMEOUT_MINUTES` | `20` / `60` | Timeouts |
 | `SCANNER_CONCURRENCY` | `2` | Scans running at once |
+| `SCANNER_WARMUP_TIMEOUT_MINUTES` | `30` | How long a Scan waits, in state `warming`, for its model to answer a first completion before its first Attempt ([ADR-0009](docs/adr/0009-model-warm-up-before-attempts.md)); `0` skips it |
 | `SCANNER_RETENTION_DAYS` / `SCANNER_SWEEP_INTERVAL_MINUTES` | `365` / `60` | Retention, and how often it is enforced (`0` = never) |
 | `PORT` | `3000` | HTTP port |
 

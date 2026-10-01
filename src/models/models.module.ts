@@ -6,6 +6,7 @@ import { PoolModel } from './entities/pool-model.entity';
 import { PoolSeed } from './entities/pool-seed.entity';
 import { Provider } from './entities/provider.entity';
 import { ModelPool } from './model-pool.service';
+import { ModelWarmup } from './model-warmup.service';
 import { ModelsController } from './models.controller';
 import { ProvidersController } from './providers.controller';
 import { ProvidersService } from './providers.service';
@@ -14,7 +15,7 @@ import { ProvidersService } from './providers.service';
 @Module({
   imports: [TypeOrmModule.forFeature([Provider, PoolModel, PoolSeed, Scan])],
   controllers: [ModelsController, ProvidersController, AdminModelsController],
-  providers: [ModelPool, ProvidersService],
-  exports: [ModelPool],
+  providers: [ModelPool, ProvidersService, ModelWarmup],
+  exports: [ModelPool, ModelWarmup],
 })
 export class ModelsModule {}

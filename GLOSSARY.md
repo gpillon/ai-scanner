@@ -24,6 +24,10 @@ _Avoid_: Skill group, plugin, extension, bundle
 One execution of the agent within a Scan; a Scan retries with a new Attempt when an Attempt ends without valid Artifacts.
 _Avoid_: Retry, iteration, run
 
+**Warm-up**:
+The one-token completion the server asks a Scan's model for before its first Attempt, waiting while the model scales up; the Scan is `warming` meanwhile (ADR-0009).
+_Avoid_: Ping, health check, preflight
+
 **Artifact**:
 A file produced by a Scan and stored for the caller to retrieve.
 _Avoid_: Output, result file

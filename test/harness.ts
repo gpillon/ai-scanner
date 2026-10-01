@@ -271,6 +271,9 @@ export function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}):
     attemptTimeoutMs: 20 * MINUTE_MS,
     scanTimeoutMs: 60 * MINUTE_MS,
     concurrency: 2,
+    // No model answers in these tests: the warm-up has its own (test/warmup.e2e-spec.ts).
+    warmupTimeoutMs: 0,
+    warmupRetryMs: 10,
     ...overrides,
   };
 }
