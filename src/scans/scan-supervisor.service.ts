@@ -16,6 +16,7 @@ import { buildReportView, fillMarkdownTemplate, fillPdfTemplate } from '../repor
 import { ModelPool } from '../models/model-pool.service';
 import { ModelUnusableError, ModelWarmup } from '../models/model-warmup.service';
 import { AgentModel, AttemptRequest, Runner } from '../runner/runner';
+import { addUsage, attemptUsage, NO_USAGE } from '../runner/usage';
 import { Scan } from './entities/scan.entity';
 import { extractSourceArchive, InvalidSourceArchiveError } from './source-archive';
 
@@ -316,6 +317,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
           },
           scanTimer,
         );
+        await this.recordUsage(id, transcriptPath);
         if (this.lettingGo(id)) return;
         if (end === 'scan-timeout') return await this.fail(id, scanTimeoutReason);
 
@@ -357,6 +359,14 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.warmups.delete(id);
     }
+  }
+
+  /** Adds the tokens an Attempt reported (its transcript's usage line) to the Scan's. */
+  private async recordUsage(id: string, transcriptPath: string): Promise<void> {
+    const used = await attemptUsage(transcriptPath);
+    if (!used) return;
+    const scan = await this.scans.findOneBy({ id });
+    if (scan) await this.scans.update(id, { usage: addUsage(scan.usage ?? NO_USAGE, used) });
   }
 
   /** Runs one Attempt, stopping it when it or the Scan times out. */

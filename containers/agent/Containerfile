@@ -14,4 +14,7 @@ RUN apt-get update \
  && npm install -g "opencode-ai@${OPENCODE_VERSION}" \
  && npm cache clean --force
 
+# Run after opencode by the Runners: prints the Attempt's token usage, subagents included.
+COPY usage.js /opt/ai-scanner/usage.js
+
 WORKDIR /workspace

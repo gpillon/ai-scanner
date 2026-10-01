@@ -221,7 +221,10 @@ describe('Kubernetes Runner', () => {
     ]);
     expect(agent.image).toBe('ghcr.io/acme/ai-scanner-agent:1.2.3');
     expect(agent.securityContext).toEqual({ allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ['ALL'] } });
-    expect(agent.command.slice(0, 2)).toEqual(['opencode', 'run']);
+    // opencode, then the usage line: its arguments follow the wrapper.
+    expect(agent.command.slice(0, 2)).toEqual(['sh', '-c']);
+    expect(agent.command[2]).toBe('opencode "$@"; status=$?; node /opt/ai-scanner/usage.js; exit $status');
+    expect(agent.command.slice(3, 5)).toEqual(['opencode', 'run']);
     expect(agent.volumeMounts).toEqual(
       expect.arrayContaining([
         { name: 'data', mountPath: '/workspace', subPath: 'scans/My_Scan.ID/workspace', readOnly: true },

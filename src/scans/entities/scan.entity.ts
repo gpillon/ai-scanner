@@ -1,4 +1,5 @@
 import { Column, Entity, PrimaryColumn } from 'typeorm';
+import type { TokenUsage } from '../../runner/usage';
 import type { PackSnapshot } from '../../skills/skill-packs.service';
 
 export interface ScanSource {
@@ -56,4 +57,8 @@ export class Scan {
   /** The Skill Packs the caller added, with the skills copied for this Scan (ADR-0008). */
   @Column({ type: 'simple-json', nullable: true })
   skillPacks: PackSnapshot[] | null;
+
+  /** Tokens the agent used, summed over the Attempts so far, subagents included. Never in the Report. */
+  @Column({ type: 'simple-json', nullable: true })
+  usage: TokenUsage | null;
 }

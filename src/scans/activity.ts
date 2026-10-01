@@ -1,3 +1,5 @@
+import { parseUsageLine } from '../runner/usage';
+
 /**
  * What a caller may see of an Attempt while it runs: one short line per thing the agent does,
  * summarised from the transcript. Never the transcript itself: it holds the prompt, the Scan
@@ -89,6 +91,19 @@ export function summarise(line: string, attempt: number, now: () => Date): Activ
     case 'step_finish': {
       const tokens = part.tokens?.total;
       return typeof tokens === 'number' ? { attempt, at, kind: 'step', text: `${tokens} tokens` } : undefined;
+    }
+    case 'usage': {
+      // The agent container's last line (containers/agent/usage.js): the Attempt's whole usage.
+      const u = parseUsageLine(trimmed);
+      if (!u) return undefined;
+      const n = (v: number) => v.toLocaleString('en-US');
+      const sessions = u.sessions > 1 ? `, ${u.sessions} sessions (${u.sessions - 1} subagent${u.sessions > 2 ? 's' : ''})` : '';
+      return {
+        attempt,
+        at: now().toISOString(),
+        kind: 'step',
+        text: `Attempt total: ${n(u.total)} tokens (input ${n(u.input)}, output ${n(u.output)}, cache read ${n(u.cacheRead)})${sessions}`,
+      };
     }
     case 'error': {
       const e = event.error as { name?: string; data?: { message?: string } } | undefined;

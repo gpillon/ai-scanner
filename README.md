@@ -62,7 +62,7 @@ curl -H "Authorization: Bearer $TOKEN" -F profile=security \
      localhost:3000/api/scan/$ID
 
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scans              # every Scan, newest first
-curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scan/$ID          # queued → running → succeeded | failed
+curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scan/$ID          # queued → warming → running → succeeded | failed, and token usage
 curl -N -H "Authorization: Bearer $TOKEN" localhost:3000/api/scan/$ID/events  # follow it live (server-sent events)
 curl -H "Authorization: Bearer $TOKEN" -o report.pdf localhost:3000/api/scan/$ID/artifacts/report.pdf
 curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:3000/api/scan/$ID  # stop and remove
@@ -71,6 +71,8 @@ curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:3000/api/scan/$ID  # 
 `/events` replays what already happened, then streams `state`, `attempt` and `activity` events until the Scan finishes. An `activity` event is a one-line summary of a tool call, a piece of the agent's text or a step, never the raw transcript. opencode reports each tool call and each block of text once it is complete, so the stream moves in steps rather than token by token. Browsers' `EventSource` cannot send the bearer header, so the UI reads the stream with `fetch`.
 
 A **Git repository** can replace the zip ([ADR-0010](docs/adr/0010-scan-a-git-repository.md)). The server checks out one commit of `ref` (or the default branch) while answering the POST, and keeps it with the Scan. Credentials, for a private repository, are used for that one fetch and never stored. Prefer a read-only token; GitHub and GitLab accept it with any username, `oauth2` by default. Only https is used, symlinks arrive as plain files, Git LFS objects are not fetched, and loopback and link-local hosts are refused. Set `SCANNER_GIT_HOSTS` to restrict the hosts, since any holder of the caller token can make the server fetch from your internal network. The New Scan form offers the same, with a button that lists the repository's branches and tags.
+
+`GET /api/scan/<id>` gives the tokens the agent used as `usage`, once an Attempt has reported it ([ADR-0011](docs/adr/0011-parallel-reviewers-and-token-usage.md)). The counts are summed over the Attempts and include every subagent: `input`, `output`, `reasoning`, `cacheRead`, `cacheWrite`, `total`, the `cost` the provider reports (0 when it reports none), and the number of agent `sessions`. They are never in the Report or the Findings. The UI shows them in the Scan's Overview.
 
 The OpenAPI document is at `/api/openapi.json`, and `/api/docs` renders it. Neither requires the token.
 

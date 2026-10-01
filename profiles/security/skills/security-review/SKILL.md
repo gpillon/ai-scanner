@@ -22,8 +22,8 @@ through it, understand how its parts interact, and report only what an attacker 
 
 ## Workflow
 
-Follow the steps in order. Keep a running list of candidate Findings as you go; you judge them in
-step 6. Note as you go what the Report needs besides the Findings: what the codebase is, its
+Follow the steps in order; steps 2 to 5 can run in parallel subagents (see below). Keep a running
+list of candidate Findings as you go; you judge them in step 6. Note as you go what the Report needs besides the Findings: what the codebase is, its
 languages, frameworks and entry points, the manifests you read, and controls it does well.
 
 ### 1. Map the codebase
@@ -36,6 +36,26 @@ languages, frameworks and entry points, the manifests you read, and controls it 
 - Note where configuration and secrets come from: env vars, config files, Dockerfiles, CI, IaC.
 - Read the sections of [references/language-patterns.md](references/language-patterns.md) for the
   frameworks you found.
+
+### Work in parallel (steps 2 to 5)
+
+When the codebase has more than a handful of source files, do not do steps 2 to 5 yourself:
+hand them to `reviewer` subagents, which run in parallel. In ONE message, call the `task` tool
+once per reviewer (`subagent_type: reviewer`), so they all start at once:
+
+- **Dependencies, secrets and insecure defaults**: steps 2 and 3, loading `insecure-defaults`.
+- **Injection and data flow**: steps 4 (injection, data handling) and 5, from every entry point.
+- **Access control and misuse-prone APIs**: step 4 (authentication, access control,
+  cryptography, business logic), loading `sharp-edges`.
+- For a large codebase, split further by area (one reviewer per top-level component), so no
+  reviewer has more than it can read.
+
+Reviewers start from nothing: each `task` prompt must say what the codebase is and its entry
+points (from step 1), exactly which part and which step of this skill to do, which skill to
+load, and to report every candidate with its file, line, evidence and attack path. Reviewers
+only read; you alone triage and write the output. When all have reported, merge their
+candidates, dropping duplicates, then go on with step 6. For a small codebase, do steps 2 to 5
+yourself, in order.
 
 ### 2. Audit the dependencies
 

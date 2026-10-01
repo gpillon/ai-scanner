@@ -266,6 +266,28 @@ export function ScanDetailPage({ id, tab }: { id: string; tab: ScanTab }) {
                               <DescriptionListTerm>Attempts</DescriptionListTerm>
                               <DescriptionListDescription>{scan.attempts}</DescriptionListDescription>
                             </DescriptionListGroup>
+                            {scan.usage && (
+                              <DescriptionListGroup>
+                                <DescriptionListTerm>Tokens</DescriptionListTerm>
+                                <DescriptionListDescription>
+                                  <div>
+                                    <strong>{formatCount(scan.usage.input)}</strong> input · <strong>{formatCount(scan.usage.output)}</strong> output
+                                    {scan.usage.cost > 0 && <> · {formatCost(scan.usage.cost)}</>}
+                                  </div>
+                                  <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">
+                                    {formatCount(scan.usage.total)} in total
+                                    {scan.usage.cacheRead > 0 && <>, {formatCount(scan.usage.cacheRead)} read from cache</>}
+                                    {scan.usage.reasoning > 0 && <>, {formatCount(scan.usage.reasoning)} reasoning</>}
+                                    {scan.usage.sessions > 1 && (
+                                      <>
+                                        {' '}
+                                        · {scan.usage.sessions} sessions ({scan.usage.sessions - 1} subagent{scan.usage.sessions > 2 ? 's' : ''})
+                                      </>
+                                    )}
+                                  </div>
+                                </DescriptionListDescription>
+                              </DescriptionListGroup>
+                            )}
                             <DescriptionListGroup>
                               <DescriptionListTerm>Created</DescriptionListTerm>
                               <DescriptionListDescription>{formatTime(scan.createdAt)}</DescriptionListDescription>
@@ -433,3 +455,6 @@ export function ScanDetailPage({ id, tab }: { id: string; tab: ScanTab }) {
     </>
   );
 }
+
+const formatCount = (n: number) => n.toLocaleString();
+const formatCost = (cost: number) => `$${cost.toFixed(cost < 1 ? 4 : 2)}`;

@@ -19,6 +19,21 @@ export interface ScanStatus {
   /** When the code came from a Git repository (ADR-0010). */
   source?: { type: 'git'; url: string; ref: string | null; commit: string };
   artifacts?: string[];
+  /** Tokens the agent used over the Attempts so far, subagents included; absent until one reports it. */
+  usage?: TokenUsage;
+}
+
+export interface TokenUsage {
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  /** As the provider reports it; 0 when it reports none. */
+  cost: number;
+  /** Agent sessions: the main one plus one per subagent. */
+  sessions: number;
 }
 
 export interface Profile {

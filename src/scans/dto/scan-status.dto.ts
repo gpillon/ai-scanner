@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { TokenUsage } from '../../runner/usage';
 import { Scan, ScanSource, ScanState } from '../entities/scan.entity';
 
 export class ScanStatusDto {
@@ -23,6 +24,13 @@ export class ScanStatusDto {
     example: { type: 'git', url: 'https://github.com/acme/app.git', ref: 'main', commit: '…' },
   })
   source?: ScanSource;
+  @ApiPropertyOptional({
+    description:
+      'Tokens the agent used, summed over its Attempts and every subagent session: input, output, reasoning, cache reads and writes, ' +
+      'their total, the cost the provider reports (0 when none), and the number of agent sessions. Present once an Attempt has reported it.',
+    example: { input: 12000, output: 3400, reasoning: 0, cacheRead: 180000, cacheWrite: 0, total: 195400, cost: 0, sessions: 4 },
+  })
+  usage?: TokenUsage;
 
   static from(scan: Scan, artifacts: string[]): ScanStatusDto {
     return {
@@ -36,6 +44,7 @@ export class ScanStatusDto {
       startedAt: scan.startedAt,
       finishedAt: scan.finishedAt,
       ...(scan.source && { source: scan.source }),
+      ...(scan.usage && { usage: scan.usage }),
       ...(scan.skillPacks?.length && {
         skillPacks: scan.skillPacks.map((p) => ({ id: p.id, skills: p.skills.map(({ name, hash }) => ({ name, hash })) })),
       }),
