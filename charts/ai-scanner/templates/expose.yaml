@@ -1,0 +1,68 @@
+{{- if .Values.expose.enabled }}
+{{- $kind := include "ai-scanner.exposeKind" . }}
+{{- if eq $kind "route" }}
+# OpenShift: a Route through the cluster's router.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "ai-scanner.fullname" . }}
+  labels:
+    {{- include "ai-scanner.labels" . | nindent 4 }}
+  {{- with .Values.expose.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.expose.host }}
+  host: {{ . | quote }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "ai-scanner.fullname" . }}
+  port:
+    targetPort: http
+  {{- if .Values.expose.tls.enabled }}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  {{- end }}
+{{- else }}
+{{- if not .Values.expose.host }}
+{{- fail "expose.host is required to expose ai-scanner through an Ingress" }}
+{{- end }}
+# Kubernetes: an Ingress, served by the cluster's ingress controller.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "ai-scanner.fullname" . }}
+  labels:
+    {{- include "ai-scanner.labels" . | nindent 4 }}
+  {{- with .Values.expose.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.expose.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.expose.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.expose.host | quote }}
+      {{- with .Values.expose.tls.secretName }}
+      secretName: {{ . }}
+      {{- end }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.expose.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "ai-scanner.fullname" . }}
+                port:
+                  name: http
+{{- end }}
+{{- end }}

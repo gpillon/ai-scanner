@@ -1,0 +1,27 @@
+ai-scanner is running in namespace {{ .Release.Namespace }}.
+Each Scan Attempt runs as an agent pod there, labelled app.kubernetes.io/component=agent.
+
+Reach the API and the web UI (/ui/):
+{{- if and .Values.expose.enabled (eq (include "ai-scanner.exposeKind" .) "route") }}
+  oc -n {{ .Release.Namespace }} get route {{ include "ai-scanner.fullname" . }} -o jsonpath='{.spec.host}'
+{{- else if .Values.expose.enabled }}
+  http{{ if .Values.expose.tls.enabled }}s{{ end }}://{{ .Values.expose.host }}/
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "ai-scanner.fullname" . }} {{ .Values.service.port }}
+  then open http://localhost:{{ .Values.service.port }}/ui/
+{{- end }}
+
+The API token{{ if .Values.auth.admin }} and the admin token{{ end }}:
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "ai-scanner.secretName" . }} -o jsonpath='{.data.SCANNER_TOKEN}' | base64 -d
+{{- if .Values.auth.admin }}
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "ai-scanner.secretName" . }} -o jsonpath='{.data.SCANNER_ADMIN_TOKEN}' | base64 -d
+{{- end }}
+{{- if not .Values.models }}
+
+No Model Pool seed was given: add Providers and models from the admin UI.
+{{- end }}
+{{- if not .Values.networkPolicy.enabled }}
+
+WARNING: networkPolicy.enabled is false. Agent pods can reach the network directly, not
+only through the egress proxy.
+{{- end }}

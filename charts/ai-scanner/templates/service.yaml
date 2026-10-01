@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-scanner.fullname" . }}
+  labels:
+    {{- include "ai-scanner.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "ai-scanner.serverSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+---
+# How agent pods reach the egress proxy sidecar. The Runner finds it as the Service that
+# selects the server pod and has a port named `egress`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-scanner.fullname" . }}-egress
+  labels:
+    {{- include "ai-scanner.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress-proxy
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ai-scanner.serverSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: egress
+      port: {{ .Values.egressProxy.port }}
+      targetPort: egress

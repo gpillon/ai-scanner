@@ -1,0 +1,60 @@
+{{- if .Values.networkPolicy.enabled }}
+# Agent pods run code-reading agents on untrusted Source Archives (ADR-0003): they reach the
+# egress proxy and DNS, and nothing else; nothing reaches them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ai-scanner.fullname" . }}-agent
+  labels:
+    {{- include "ai-scanner.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-scanner.agentSelectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ai-scanner.serverSelectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.egressProxy.port }}
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.dnsNamespaceSelector | nindent 12 }}
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+        - { port: 5353, protocol: UDP }
+        - { port: 5353, protocol: TCP }
+---
+# The server pod: its API to whoever may reach it, its egress proxy to agent pods only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ai-scanner.fullname" . }}-server
+  labels:
+    {{- include "ai-scanner.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-scanner.serverSelectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 3000
+          protocol: TCP
+      {{- with .Values.networkPolicy.apiIngressFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ai-scanner.agentSelectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.egressProxy.port }}
+          protocol: TCP
+{{- end }}

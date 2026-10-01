@@ -1,0 +1,194 @@
+{{- $openshift := eq (include "ai-scanner.openshift" .) "true" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-scanner.fullname" . }}
+  labels:
+    {{- include "ai-scanner.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  # One server: SQLite, the in-process Scan supervisor and a ReadWriteOnce data volume.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "ai-scanner.serverSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "ai-scanner.serverSelectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "ai-scanner.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        {{- if not $openshift }}
+        # The image's `node` user. On OpenShift the restricted SCC picks UID and fsGroup instead.
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        {{- end }}
+      containers:
+        - name: server
+          image: {{ include "ai-scanner.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: SCANNER_RUNNER
+              value: kubernetes
+            - name: SCANNER_DATA_DIR
+              value: /data
+            # The Runner reads its own pod to discover the claim, node, image and egress Service.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SCANNER_K8S_AGENT_SERVICE_ACCOUNT
+              value: {{ include "ai-scanner.agentServiceAccountName" . }}
+            - name: SCANNER_K8S_AGENT_MEMORY
+              value: {{ .Values.agent.resources.limits.memory | quote }}
+            - name: SCANNER_K8S_AGENT_CPU
+              value: {{ .Values.agent.resources.limits.cpu | quote }}
+            {{- with .Values.agent.image }}
+            - name: SCANNER_AGENT_IMAGE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.agent.passEnv }}
+            - name: SCANNER_AGENT_ENV
+              value: {{ join "," . | quote }}
+            {{- end }}
+            - name: SCANNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-scanner.secretName" . }}
+                  key: SCANNER_TOKEN
+            - name: SCANNER_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-scanner.secretName" . }}
+                  key: SCANNER_ADMIN_TOKEN
+                  optional: true
+            - name: SCANNER_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-scanner.secretName" . }}
+                  key: SCANNER_SECRET_KEY
+                  optional: true
+            {{- with .Values.models }}
+            - name: SCANNER_MODELS
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- with .Values.defaultModel }}
+            - name: SCANNER_DEFAULT_MODEL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: SCANNER_CONCURRENCY
+              value: {{ .Values.scanner.concurrency | quote }}
+            - name: SCANNER_MAX_ATTEMPTS
+              value: {{ .Values.scanner.maxAttempts | quote }}
+            - name: SCANNER_ATTEMPT_TIMEOUT_MINUTES
+              value: {{ .Values.scanner.attemptTimeoutMinutes | quote }}
+            - name: SCANNER_SCAN_TIMEOUT_MINUTES
+              value: {{ .Values.scanner.scanTimeoutMinutes | quote }}
+            - name: SCANNER_RETENTION_DAYS
+              value: {{ .Values.scanner.retentionDays | quote }}
+            - name: SCANNER_MAX_ARCHIVE_MB
+              value: {{ .Values.scanner.maxArchiveMb | quote }}
+            - name: SCANNER_DEFAULT_LANGUAGE
+              value: {{ .Values.scanner.defaultLanguage | quote }}
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            # The allow list the server writes before each Attempt, which the proxy rereads.
+            - name: egress
+              mountPath: /data/egress
+            - name: tmp
+              mountPath: /tmp
+        - name: egress-proxy
+          image: {{ include "ai-scanner.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [node, /app/containers/egress-proxy/proxy.js]
+          env:
+            - name: ALLOW_FILE
+              value: /egress/allow.txt
+            - name: PORT
+              value: {{ .Values.egressProxy.port | quote }}
+          ports:
+            - name: egress
+              containerPort: {{ .Values.egressProxy.port }}
+          readinessProbe:
+            tcpSocket:
+              port: egress
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.egressProxy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: egress
+              mountPath: /egress
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "ai-scanner.claimName" . }}
+        - name: egress
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

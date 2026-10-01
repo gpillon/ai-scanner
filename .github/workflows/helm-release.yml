@@ -1,0 +1,84 @@
+name: Helm chart
+
+# Lints the chart on every change, and publishes it to the gh-pages branch (a Helm repository
+# served by GitHub Pages) when its version changes on main. chart-releaser skips versions it
+# already released, so bump charts/ai-scanner/Chart.yaml `version` to publish.
+#
+# One-time setup: create an empty `gh-pages` branch, and enable Pages from it.
+#   helm repo add ai-scanner https://<owner>.github.io/<repo>
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - charts/**
+      - .github/workflows/helm-release.yml
+  pull_request:
+    paths:
+      - charts/**
+      - .github/workflows/helm-release.yml
+  workflow_dispatch:
+
+concurrency:
+  group: helm-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Lint
+        run: helm lint --strict charts/ai-scanner
+
+      # Both flavours: vanilla Kubernetes gets an Ingress, OpenShift (detected from its APIs) a Route.
+      - name: Render
+        run: |
+          helm template t charts/ai-scanner --set expose.enabled=true --set expose.host=scanner.example.com > /tmp/kubernetes.yaml
+          helm template t charts/ai-scanner --set expose.enabled=true \
+            --api-versions security.openshift.io/v1 --api-versions route.openshift.io/v1 > /tmp/openshift.yaml
+          grep -q '^kind: Ingress' /tmp/kubernetes.yaml && ! grep -q '^kind: Route' /tmp/kubernetes.yaml
+          grep -q '^kind: Route' /tmp/openshift.yaml && ! grep -q '^kind: Ingress' /tmp/openshift.yaml
+          ! grep -q 'runAsUser' /tmp/openshift.yaml
+
+      - name: Validate against the Kubernetes schemas
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          ./kubeconform -strict -summary -kubernetes-version 1.30.0 /tmp/kubernetes.yaml
+          ./kubeconform -strict -summary -kubernetes-version 1.30.0 -skip Route /tmp/openshift.yaml
+
+  release:
+    name: Publish to GitHub Pages
+    needs: lint
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - uses: helm/chart-releaser-action@v1.7.0
+        with:
+          charts_dir: charts
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

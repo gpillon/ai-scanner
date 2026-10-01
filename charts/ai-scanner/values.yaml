@@ -1,0 +1,133 @@
+# Default values for the ai-scanner chart.
+#
+# The server runs the Kubernetes Runner (it detects that it runs in a pod): each Scan Attempt
+# is an agent pod in the release namespace. Most of the agent setup is discovered at runtime
+# from the server's own pod (claim, node, image, pull secrets, egress Service), so the values
+# below are mostly about the server itself.
+
+image:
+  repository: ghcr.io/gpillon/ai-scanner
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Where to run: `auto` detects OpenShift from the cluster's APIs (security.openshift.io).
+# On OpenShift, the restricted SCC assigns UIDs and fsGroup; elsewhere the chart sets them.
+openshift: auto
+
+auth:
+  # Secret holding SCANNER_TOKEN (required), and optionally SCANNER_ADMIN_TOKEN and
+  # SCANNER_SECRET_KEY. When empty, the chart creates one with random values, kept across upgrades.
+  existingSecret: ""
+  # Enable the admin API and UI (Providers and models). Ignored with existingSecret.
+  admin: true
+
+# The Model Pool's seed, read on the very first start only (it then lives in the database and
+# is managed from the admin UI). Same format as SCANNER_MODELS, e.g.
+#   - { id: claude-sonnet, provider: anthropic }
+#   - { id: qwen, provider: local, baseUrl: "http://llm.example:8000/v1" }
+models: []
+defaultModel: ""
+
+# Extra environment for the server, e.g. other SCANNER_* settings, or model API keys:
+#   - name: ANTHROPIC_API_KEY
+#     valueFrom: { secretKeyRef: { name: llm-keys, key: anthropic } }
+env: []
+envFrom: []
+
+# Agent pods (one per Scan Attempt).
+agent:
+  # Defaults to the server image's repository with `-agent` appended, same tag.
+  image: ""
+  resources:
+    limits:
+      memory: 4Gi
+      cpu: "2"
+  # Server environment variables handed to the agent, e.g. [ANTHROPIC_API_KEY].
+  passEnv: []
+  serviceAccount:
+    create: true
+    name: ""
+
+# Scans, timeouts and limits (see .env.example for the meaning of each).
+scanner:
+  concurrency: 2
+  maxAttempts: 3
+  attemptTimeoutMinutes: 20
+  scanTimeoutMinutes: 60
+  retentionDays: 365
+  maxArchiveMb: 200
+  defaultLanguage: en
+
+persistence:
+  # The data directory: database, Source Archives, workspaces and Artifacts. Agent pods mount
+  # it too: with a ReadWriteOnce volume they are scheduled on the server's node.
+  existingClaim: ""
+  accessModes: [ReadWriteOnce]
+  size: 20Gi
+  storageClass: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 3000
+
+# The egress proxy: a sidecar of the server pod. Agent pods reach the model endpoints only
+# through it, and it lets through only the Model Pool's endpoints.
+egressProxy:
+  port: 3128
+  resources:
+    limits:
+      memory: 128Mi
+      cpu: 500m
+    requests:
+      memory: 32Mi
+      cpu: 10m
+
+networkPolicy:
+  # Keeps agent pods off everything but the egress proxy and DNS, and the proxy's port off
+  # everyone but agent pods. Needs a CNI that enforces NetworkPolicy.
+  enabled: true
+  # Where cluster DNS runs; empty matches any namespace (port 53/5353 only).
+  dnsNamespaceSelector: {}
+  # Extra ingress sources allowed to the API port (by default anything may reach it).
+  apiIngressFrom: []
+
+resources:
+  limits:
+    memory: 2Gi
+  requests:
+    memory: 256Mi
+    cpu: 100m
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Expose the API and the web UI outside the cluster. With `type: auto` the chart creates an
+# OpenShift Route on OpenShift and an Ingress elsewhere; force either with `route` or `ingress`.
+# Off by default: on most clusters either makes it reachable from the internet.
+expose:
+  enabled: false
+  type: auto
+  # Empty: the Route gets the cluster's default host; an Ingress needs one.
+  host: ""
+  tls:
+    enabled: true
+    # Ingress only: the Secret with the certificate (empty: the ingress controller's default).
+    secretName: ""
+  # Ingress only.
+  className: ""
+  # Added to the Route or the Ingress, e.g. cert-manager or router settings.
+  annotations: {}
