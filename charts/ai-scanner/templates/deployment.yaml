@@ -57,7 +57,7 @@ spec:
             # The root filesystem is read-only: tools the server runs (git, npm) write under HOME.
             - name: HOME
               value: /tmp
-            # The Runner reads its own pod to discover the claim, node, image and egress Service.
+            # The Runner reads its own pod to discover the claim, node, images and pull secrets.
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -141,45 +141,12 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-            # The allow list the server writes before each Attempt, which the proxy rereads.
-            - name: egress
-              mountPath: /data/egress
             - name: tmp
               mountPath: /tmp
-        - name: egress-proxy
-          image: {{ include "ai-scanner.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: [node, /app/containers/egress-proxy/proxy.js]
-          env:
-            - name: ALLOW_FILE
-              value: /egress/allow.txt
-            - name: PORT
-              value: {{ .Values.egressProxy.port | quote }}
-          ports:
-            - name: egress
-              containerPort: {{ .Values.egressProxy.port }}
-          readinessProbe:
-            tcpSocket:
-              port: egress
-            periodSeconds: 10
-          resources:
-            {{- toYaml .Values.egressProxy.resources | nindent 12 }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
-          volumeMounts:
-            - name: egress
-              mountPath: /egress
-              readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "ai-scanner.claimName" . }}
-        - name: egress
-          emptyDir:
-            sizeLimit: 1Mi
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi

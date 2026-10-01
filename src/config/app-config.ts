@@ -27,15 +27,15 @@ export function detectRunner(env: NodeJS.ProcessEnv = process.env): RunnerKind {
 }
 
 /**
- * How the Kubernetes Runner runs agent pods (ADR-0007). What is left unset is discovered from
- * the server's own pod: its namespace, the claim holding the data directory, the node, image,
- * image pull secrets and fsGroup, and the Service exposing the egress proxy.
+ * How the Kubernetes Runner runs agent pods, each with its own egress proxy pod (ADR-0007).
+ * What is left unset is discovered from the server's own pod: its namespace, the claim holding
+ * the data directory, the node, its image, image pull secrets and fsGroup.
  */
 export interface KubernetesConfig {
   /** Unset: the server's image with `-agent` added to the repository name. */
   agentImage?: string;
-  /** The egress proxy's URL as agent pods reach it. Unset: the Service selecting the server pod with a port named `egress`. */
-  egressProxy?: string;
+  /** Runs each Attempt's egress proxy (`node /app/containers/egress-proxy/proxy.js`). Unset: the server's image. */
+  proxyImage?: string;
   /** The PersistentVolumeClaim holding the data directory. Unset: the one the server pod mounts there. */
   dataClaim?: string;
   /** ServiceAccount of agent pods; it needs no permission, and its token is never mounted. */
@@ -167,7 +167,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     kubernetes: {
       agentImage: env.SCANNER_AGENT_IMAGE || undefined,
-      egressProxy: env.SCANNER_K8S_EGRESS_PROXY || undefined,
+      proxyImage: env.SCANNER_K8S_PROXY_IMAGE || undefined,
       dataClaim: env.SCANNER_K8S_DATA_CLAIM || undefined,
       agentServiceAccount: env.SCANNER_K8S_AGENT_SERVICE_ACCOUNT || undefined,
       agentEnv: list(env.SCANNER_AGENT_ENV),

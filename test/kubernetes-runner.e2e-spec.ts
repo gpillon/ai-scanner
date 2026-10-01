@@ -12,30 +12,43 @@ import { testConfig } from './harness';
 
 const NS = 'scanner-ns';
 const SERVER_POD = 'ai-scanner-7d9f-abcde';
+const PROXY_IP = '10.128.4.7';
 
 /** How a fake agent pod goes: the statuses it shows in turn (the last repeats), and its log. */
 interface PodScript {
   statuses: object[];
   log?: string;
+  /** How the Attempt's proxy pod goes; by default it is ready at once. */
+  proxy?: object[];
 }
 const terminated = (exitCode: number) => ({
   phase: exitCode ? 'Failed' : 'Succeeded',
   containerStatuses: [{ name: 'agent', state: { terminated: { exitCode } } }],
 });
 const running = { phase: 'Running', containerStatuses: [{ name: 'agent', state: { running: {} } }] };
+const proxyReady = {
+  phase: 'Running',
+  podIP: PROXY_IP,
+  conditions: [{ type: 'Ready', status: 'True' }],
+  containerStatuses: [{ name: 'egress-proxy', ready: true, state: { running: {} } }],
+};
+
+type Kind = 'pods' | 'secrets' | 'networkpolicies';
 
 /**
- * Just enough of the Kubernetes API for the Runner: the server's own pod, its claim and
- * Services, and agent pods and Secrets, which it records.
+ * Just enough of the Kubernetes API for the Runner: the server's own pod and its claim, and the
+ * pods, Secrets and NetworkPolicies it creates, which it records in order.
  */
 class FakeKube {
   server!: Server;
-  readonly pods = new Map<string, any>();
-  readonly secrets = new Map<string, any>();
-  readonly created: { pods: any[]; secrets: any[] } = { pods: [], secrets: [] };
+  readonly stores: Record<Kind, Map<string, any>> = { pods: new Map(), secrets: new Map(), networkpolicies: new Map() };
+  /** Everything created, in order, as `kind/name`. */
+  readonly log: string[] = [];
+  readonly created: Record<Kind, any[]> = { pods: [], secrets: [], networkpolicies: [] };
   readonly deleted: string[] = [];
   readonly patches: { path: string; body: any }[] = [];
   readonly tokens: (string | undefined)[] = [];
+  readonly logRequests: string[] = [];
   script: PodScript = { statuses: [terminated(0)], log: 'agent log\n' };
   accessModes = ['ReadWriteOnce'];
   selfPod: any;
@@ -48,13 +61,14 @@ class FakeKube {
         nodeName: 'node-a',
         imagePullSecrets: [{ name: 'ghcr' }],
         securityContext: { fsGroup: 1000 },
-        containers: [
-          { name: 'server', image: 'ghcr.io/acme/ai-scanner:1.2.3', volumeMounts: [{ name: 'data', mountPath: dataDir }] },
-          { name: 'egress-proxy', image: 'ghcr.io/acme/ai-scanner:1.2.3', volumeMounts: [{ name: 'data', mountPath: '/egress', subPath: 'egress', readOnly: true }] },
-        ],
+        containers: [{ name: 'server', image: 'ghcr.io/acme/ai-scanner:1.2.3', volumeMounts: [{ name: 'data', mountPath: dataDir }] }],
         volumes: [{ name: 'data', persistentVolumeClaim: { claimName: 'scanner-data' } }],
       },
     };
+  }
+
+  get pods() {
+    return this.stores.pods;
   }
 
   async start(): Promise<string> {
@@ -78,34 +92,27 @@ class FakeKube {
       res.end(typeof data === 'string' ? data : JSON.stringify(data));
     };
     const notFound = () => send(404, { kind: 'Status', reason: 'NotFound', message: 'not found' });
-    const base = `/api/v1/namespaces/${NS}/`;
-    if (!url.pathname.startsWith(base)) return send(403, { reason: 'Forbidden', message: 'wrong namespace' });
-    const [kind, name, sub] = url.pathname.slice(base.length).split('/');
-    const store = kind === 'pods' ? this.pods : kind === 'secrets' ? this.secrets : undefined;
+    const core = `/api/v1/namespaces/${NS}/`;
+    const networking = `/apis/networking.k8s.io/v1/namespaces/${NS}/`;
+    const prefix = url.pathname.startsWith(core) ? core : url.pathname.startsWith(networking) ? networking : undefined;
+    if (!prefix) return send(403, { reason: 'Forbidden', message: 'wrong namespace or group' });
+    const [kind, name, sub] = url.pathname.slice(prefix.length).split('/');
 
     if (kind === 'pods' && name === SERVER_POD && req.method === 'GET') return send(200, this.selfPod);
     if (kind === 'persistentvolumeclaims' && req.method === 'GET') {
       return name === 'scanner-data' ? send(200, { status: { accessModes: this.accessModes } }) : notFound();
     }
-    if (kind === 'services' && req.method === 'GET') {
-      return send(200, {
-        items: [
-          { metadata: { name: 'other' }, spec: { selector: { app: 'other' }, ports: [{ name: 'egress', port: 3128 }] } },
-          { metadata: { name: 'scan-prod-api' }, spec: { selector: { [K8S.instance]: 'scan-prod' }, ports: [{ name: 'http', port: 3000 }] } },
-          { metadata: { name: 'scan-prod-egress' }, spec: { selector: { [K8S.instance]: 'scan-prod', [K8S.component]: 'server' }, ports: [{ name: 'egress', port: 3128 }] } },
-        ],
-      });
-    }
-    if (!store) return notFound();
+    const store = this.stores[kind as Kind];
+    if (!store || (kind === 'networkpolicies') !== (prefix === networking)) return notFound();
     if (req.method === 'GET' && !name) {
-      const selector = url.searchParams.get('labelSelector') ?? '';
-      const [k, v] = selector.split('=');
+      const [k, v] = (url.searchParams.get('labelSelector') ?? '').split('=');
       return send(200, { items: [...store.values()].filter((o) => o.metadata.labels?.[k] === v) });
     }
     if (req.method === 'POST') {
       const object = { ...body, metadata: { ...body.metadata, uid: `${body.metadata.name}-uid` } };
       store.set(body.metadata.name, object);
-      this.created[kind as 'pods' | 'secrets'].push(body);
+      this.created[kind as Kind].push(body);
+      this.log.push(`${kind}/${body.metadata.name}`);
       return send(201, object);
     }
     if (req.method === 'DELETE') {
@@ -119,13 +126,16 @@ class FakeKube {
       this.patches.push({ path: `${kind}/${name}`, body });
       return send(200, store.get(name));
     }
-    if (kind === 'pods' && sub === 'log') return store.has(name) ? send(200, this.script.log ?? '') : notFound();
+    if (kind === 'pods' && sub === 'log') {
+      this.logRequests.push(url.search);
+      return store.has(name) ? send(200, this.script.log ?? '') : notFound();
+    }
     if (kind === 'pods' && req.method === 'GET') {
       if (!store.has(name)) return notFound();
       const n = this.polls.get(name) ?? 0;
       this.polls.set(name, n + 1);
-      const status = this.script.statuses[Math.min(n, this.script.statuses.length - 1)];
-      return send(200, { ...store.get(name), status });
+      const statuses = name.endsWith('-proxy') ? (this.script.proxy ?? [proxyReady]) : this.script.statuses;
+      return send(200, { ...store.get(name), status: statuses[Math.min(n, statuses.length - 1)] });
     }
     return notFound();
   }
@@ -167,10 +177,14 @@ describe('Kubernetes Runner', () => {
       skillsDir,
       model: 'claude',
       agentModel: { provider: 'anthropic', builtIn: true, name: 'claude-x', apiKey: 'sk-secret-123' },
-      egress: ['api.anthropic.com:443'],
+      egress: ['api.anthropic.com:443', 'llm.internal:8000'],
+      modelEgress: ['api.anthropic.com:443'],
       ...over,
     };
   }
+
+  const agentPod = () => kube.created.pods.find((p) => p.metadata.labels[K8S.component] === 'agent');
+  const proxyPod = () => kube.created.pods.find((p) => p.metadata.labels[K8S.component] === 'egress-proxy');
 
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'ai-scanner-k8s-'));
@@ -186,7 +200,7 @@ describe('Kubernetes Runner', () => {
     const req = await request();
     expect(await runner.run(req)).toEqual({ exitCode: 0 });
 
-    const [pod] = kube.created.pods;
+    const pod = agentPod();
     const spec = pod.spec;
     const agent = spec.containers[0];
     expect(pod.metadata.name).toBe(attemptPodName('My_Scan.ID', 1));
@@ -216,8 +230,6 @@ describe('Kubernetes Runner', () => {
       ]),
     );
     expect(spec.volumes[0]).toEqual({ name: 'data', persistentVolumeClaim: { claimName: 'scanner-data' } });
-    const env = Object.fromEntries(agent.env.map((e: any) => [e.name, e.value]));
-    expect(env.HTTPS_PROXY).toBe(`http://scan-prod-egress.${NS}.svc:3128`);
 
     // The key is in a Secret of its own, owned by the pod, and never in the pod spec.
     expect(JSON.stringify(pod)).not.toContain('sk-secret-123');
@@ -225,13 +237,75 @@ describe('Kubernetes Runner', () => {
     expect(kube.created.secrets[0].stringData).toEqual({ [STORED_KEY_ENV]: 'sk-secret-123' });
     expect(kube.patches[0].body.metadata.ownerReferences[0]).toMatchObject({ kind: 'Pod', name: pod.metadata.name });
 
-    // Skills copied onto the volume, the allow list written, the log kept, everything removed.
+    // Skills copied onto the volume, the log kept, and everything of the Attempt removed.
     expect(await readFile(join(dataDir, 'scans', 'My_Scan.ID', 'agent-skills', 'security-review', 'SKILL.md'), 'utf8')).toBe('# skill\n');
-    expect(await readFile(join(dataDir, 'egress', 'allow.txt'), 'utf8')).toBe('api.anthropic.com:443\n');
     expect(await readFile(req.transcriptPath, 'utf8')).toBe('agent log\n');
-    expect(kube.pods.size).toBe(0);
-    expect(kube.secrets.size).toBe(0);
+    for (const store of Object.values(kube.stores)) expect(store.size).toBe(0);
     expect(kube.tokens.every((t) => t === 'Bearer sa-token')).toBe(true);
+  });
+
+  it("gives the Attempt its own egress proxy, allowing only the Scan's model, reached by IP", async () => {
+    await makeRunner();
+    await runner.run(await request());
+    const pod = agentPod();
+    const proxy = proxyPod();
+
+    expect(proxy.metadata.name).toBe(`${pod.metadata.name}-proxy`);
+    expect(proxy.spec).toMatchObject({ automountServiceAccountToken: false, enableServiceLinks: false, restartPolicy: 'Never' });
+    expect(proxy.spec.affinity).toBeUndefined();
+    expect(proxy.spec.volumes).toBeUndefined();
+    const container = proxy.spec.containers[0];
+    // The server's own image ships the proxy.
+    expect(container.image).toBe('ghcr.io/acme/ai-scanner:1.2.3');
+    expect(container.command).toEqual(['node', '/app/containers/egress-proxy/proxy.js']);
+    expect(container.env).toEqual([
+      { name: 'ALLOW', value: 'api.anthropic.com:443' },
+      { name: 'PORT', value: '3128' },
+    ]);
+    expect(container.securityContext.readOnlyRootFilesystem).toBe(true);
+
+    const env = Object.fromEntries(pod.spec.containers[0].env.map((e: any) => [e.name, e.value]));
+    expect(env.HTTPS_PROXY).toBe(`http://${PROXY_IP}:3128`);
+    expect(env.HTTP_PROXY).toBe(`http://${PROXY_IP}:3128`);
+    // No resolver to reach: lookups fail at once rather than time out.
+    expect(pod.spec.dnsPolicy).toBe('None');
+    expect(pod.spec.dnsConfig.nameservers).toEqual(['127.0.0.1']);
+    expect(proxy.spec.dnsPolicy).toBeUndefined();
+  });
+
+  it('confines agent and proxy to each other with NetworkPolicies created before either pod', async () => {
+    await makeRunner();
+    await runner.run(await request());
+    const name = agentPod().metadata.name;
+    const [agentPolicy, proxyPolicy] = kube.created.networkpolicies;
+    const agentSel = { matchLabels: { [K8S.attemptPod]: name, [K8S.component]: 'agent' } };
+    const proxySel = { matchLabels: { [K8S.attemptPod]: name, [K8S.component]: 'egress-proxy' } };
+    expect(agentPolicy.spec).toEqual({ podSelector: agentSel, policyTypes: ['Egress'], egress: [{ to: [{ podSelector: proxySel }], ports: [{ port: 3128, protocol: 'TCP' }] }] });
+    expect(proxyPolicy.spec).toEqual({ podSelector: proxySel, policyTypes: ['Ingress'], ingress: [{ from: [{ podSelector: agentSel }], ports: [{ port: 3128, protocol: 'TCP' }] }] });
+    expect(agentPod().metadata.labels[K8S.attemptPod]).toBe(name);
+    expect(proxyPod().metadata.labels[K8S.attemptPod]).toBe(name);
+    expect(kube.log).toEqual([
+      `networkpolicies/${name}-agent`,
+      `networkpolicies/${name}-proxy`,
+      `pods/${name}-proxy`,
+      `secrets/${name}-env`,
+      `pods/${name}`,
+    ]);
+  });
+
+  it('starts the agent only once its proxy is ready', async () => {
+    kube.script = { ...kube.script, proxy: [{ phase: 'Pending' }, { phase: 'Running', conditions: [{ type: 'Ready', status: 'False' }] }, proxyReady] };
+    await makeRunner();
+    expect(await runner.run(await request())).toEqual({ exitCode: 0 });
+    expect(agentPod()).toBeDefined();
+  });
+
+  it('ends the Attempt at once when its proxy cannot start, without starting the agent', async () => {
+    kube.script = { ...kube.script, proxy: [{ phase: 'Pending', containerStatuses: [{ name: 'egress-proxy', state: { waiting: { reason: 'ErrImagePull' } } }] }] };
+    await makeRunner();
+    await expect(runner.run(await request())).rejects.toThrow(/proxy.*ErrImagePull/);
+    expect(agentPod()).toBeUndefined();
+    for (const store of Object.values(kube.stores)) expect(store.size).toBe(0);
   });
 
   it("mounts a Scan's own skills snapshot where it is, on the data volume", async () => {
@@ -239,7 +313,7 @@ describe('Kubernetes Runner', () => {
     const snapshot = join(dataDir, 'scans', 'My_Scan.ID', 'skills');
     await mkdir(join(snapshot, 'pack-skill'), { recursive: true });
     await runner.run(await request({ skillsDir: snapshot }));
-    expect(kube.created.pods[0].spec.containers[0].volumeMounts).toContainEqual({
+    expect(agentPod().spec.containers[0].volumeMounts).toContainEqual({
       name: 'data',
       mountPath: '/skills',
       subPath: 'scans/My_Scan.ID/skills',
@@ -247,23 +321,22 @@ describe('Kubernetes Runner', () => {
     });
   });
 
-  it("lets agent pods run on any node when the claim is ReadWriteMany", async () => {
+  it('lets agent pods run on any node when the claim is ReadWriteMany', async () => {
     kube.accessModes = ['ReadWriteMany'];
     await makeRunner();
     await runner.run(await request());
-    expect(kube.created.pods[0].spec.affinity).toBeUndefined();
+    expect(agentPod().spec.affinity).toBeUndefined();
   });
 
-  it('uses the configured image, proxy and ServiceAccount over what it would discover', async () => {
-    await makeRunner({ agentImage: 'registry.local/agent:dev', egressProxy: 'http://proxy:3128', agentServiceAccount: 'scanner-agent' });
+  it('uses the configured images and ServiceAccount over what it would discover', async () => {
+    await makeRunner({ agentImage: 'registry.local/agent:dev', proxyImage: 'registry.local/scanner:dev', agentServiceAccount: 'scanner-agent' });
     await runner.run(await request({ agentModel: { provider: 'local', builtIn: false, name: 'qwen', baseUrl: 'http://llm:8000/v1' } }));
-    const [pod] = kube.created.pods;
-    expect(pod.spec.containers[0].image).toBe('registry.local/agent:dev');
-    expect(pod.spec.serviceAccountName).toBe('scanner-agent');
-    expect(pod.spec.containers[0].env).toContainEqual({ name: 'HTTPS_PROXY', value: 'http://proxy:3128' });
+    expect(agentPod().spec.containers[0].image).toBe('registry.local/agent:dev');
+    expect(proxyPod().spec.containers[0].image).toBe('registry.local/scanner:dev');
+    expect(agentPod().spec.serviceAccountName).toBe('scanner-agent');
     // No key: no Secret.
     expect(kube.created.secrets).toEqual([]);
-    expect(pod.spec.containers[0].envFrom).toBeUndefined();
+    expect(agentPod().spec.containers[0].envFrom).toBeUndefined();
   });
 
   it("returns the agent's exit code, after it ran", async () => {
@@ -272,18 +345,27 @@ describe('Kubernetes Runner', () => {
     expect(await runner.run(await request())).toEqual({ exitCode: 3 });
   });
 
+  it("follows the agent's log into the transcript from the moment it runs", async () => {
+    kube.script = { statuses: [{ phase: 'Pending' }, running, running, terminated(0)], log: '{"type":"step_start"}\n' };
+    await makeRunner();
+    const req = await request();
+    await runner.run(req);
+    expect(kube.logRequests).toEqual(['?container=agent&follow=true']);
+    expect(await readFile(req.transcriptPath, 'utf8')).toBe('{"type":"step_start"}\n');
+  });
+
   it.each([
     ['ImagePullBackOff', { phase: 'Pending', containerStatuses: [{ name: 'agent', state: { waiting: { reason: 'ImagePullBackOff', message: 'pull denied' } } }] }],
     ['CreateContainerConfigError', { phase: 'Pending', containerStatuses: [{ name: 'agent', state: { waiting: { reason: 'CreateContainerConfigError' } } }] }],
     ['DeadlineExceeded', { phase: 'Failed', reason: 'DeadlineExceeded', message: 'active deadline' }],
-  ])('ends the Attempt at once on %s, removing the pod', async (reason, status) => {
+  ])('ends the Attempt at once on %s, removing everything', async (reason, status) => {
     kube.script = { statuses: [status] };
     await makeRunner();
     await expect(runner.run(await request())).rejects.toThrow(reason);
-    expect(kube.pods.size).toBe(0);
+    for (const store of Object.values(kube.stores)) expect(store.size).toBe(0);
   });
 
-  it('stops a running Attempt by deleting its pod', async () => {
+  it('stops a running Attempt by deleting its pods', async () => {
     kube.script = { statuses: [running] };
     await makeRunner();
     const req = await request();
@@ -291,18 +373,20 @@ describe('Kubernetes Runner', () => {
     await new Promise((r) => setTimeout(r, 100));
     await runner.stop(req.scanId);
     expect(await run).toEqual({ exitCode: 137 });
-    expect(kube.pods.size).toBe(0);
+    for (const store of Object.values(kube.stores)) expect(store.size).toBe(0);
   });
 
-  it("removes this instance's leftover agent pods and Secrets at startup, and no other's", async () => {
+  it("removes this instance's leftovers at startup, and no other's", async () => {
     await makeRunner();
-    const mine = { metadata: { name: 'ai-scanner-old-1', labels: { [K8S.managedBy]: 'scan-prod' } } };
-    const theirs = { metadata: { name: 'ai-scanner-other-1', labels: { [K8S.managedBy]: 'scan-test' } } };
-    kube.pods.set(mine.metadata.name, mine).set(theirs.metadata.name, theirs);
-    kube.secrets.set('ai-scanner-old-1-env', { metadata: { name: 'ai-scanner-old-1-env', labels: { [K8S.managedBy]: 'scan-prod' } } });
+    const item = (name: string, owner: string) => ({ metadata: { name, labels: { [K8S.managedBy]: owner } } });
+    kube.stores.pods.set('ai-scanner-old-1', item('ai-scanner-old-1', 'scan-prod')).set('ai-scanner-other-1', item('ai-scanner-other-1', 'scan-test'));
+    kube.stores.secrets.set('ai-scanner-old-1-env', item('ai-scanner-old-1-env', 'scan-prod'));
+    kube.stores.networkpolicies.set('ai-scanner-old-1-agent', item('ai-scanner-old-1-agent', 'scan-prod'));
     await runner.run(await request());
-    expect(kube.deleted).toEqual(expect.arrayContaining(['pods/ai-scanner-old-1', 'secrets/ai-scanner-old-1-env']));
-    expect(kube.pods.has('ai-scanner-other-1')).toBe(true);
+    expect(kube.deleted).toEqual(
+      expect.arrayContaining(['pods/ai-scanner-old-1', 'secrets/ai-scanner-old-1-env', 'networkpolicies/ai-scanner-old-1-agent']),
+    );
+    expect(kube.stores.pods.has('ai-scanner-other-1')).toBe(true);
   });
 
   it('refuses to start when no claim holds the data directory', async () => {
@@ -326,7 +410,8 @@ describe('Kubernetes Runner helpers', () => {
 
   it('names pods by a hash of the Scan id, so any id gives a valid name', () => {
     for (const id of ['UPPER_case.id', 'x'.repeat(200), 'a']) {
-      expect(attemptPodName(id, 12)).toMatch(/^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/);
+      // The longest name derived from it, the proxy pod's, is a valid name too.
+      expect(`${attemptPodName(id, 12)}-proxy`).toMatch(/^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/);
     }
     expect(attemptPodName('a', 1)).not.toBe(attemptPodName('A', 1));
   });

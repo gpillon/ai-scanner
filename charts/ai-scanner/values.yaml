@@ -2,7 +2,7 @@
 #
 # The server runs the Kubernetes Runner (it detects that it runs in a pod): each Scan Attempt
 # is an agent pod in the release namespace. Most of the agent setup is discovered at runtime
-# from the server's own pod (claim, node, image, pull secrets, egress Service), so the values
+# from the server's own pod (claim, node, images, pull secrets), so the values
 # below are mostly about the server itself.
 
 image:
@@ -81,25 +81,13 @@ service:
   type: ClusterIP
   port: 3000
 
-# The egress proxy: a sidecar of the server pod. Agent pods reach the model endpoints only
-# through it, and it lets through only the Model Pool's endpoints.
-egressProxy:
-  port: 3128
-  resources:
-    limits:
-      memory: 128Mi
-      cpu: 500m
-    requests:
-      memory: 32Mi
-      cpu: 10m
-
+# Each Attempt gets its own egress proxy pod, running the server image, that lets through only
+# the Scan's model endpoint. Its image can be overridden with SCANNER_K8S_PROXY_IMAGE (env).
 networkPolicy:
-  # Keeps agent pods off everything but the egress proxy and DNS, and the proxy's port off
-  # everyone but agent pods. Needs a CNI that enforces NetworkPolicy.
+  # Denies agent pods everything (DNS included) and keeps proxy pods unreachable; the server
+  # adds, per Attempt, agent -> its own proxy. Needs a CNI that enforces NetworkPolicy.
   enabled: true
-  # Where cluster DNS runs; empty matches any namespace (port 53/5353 only).
-  dnsNamespaceSelector: {}
-  # Extra ingress sources allowed to the API port (by default anything may reach it).
+  # Restricts the API port to these sources (NetworkPolicy `from` entries). Empty: anyone.
   apiIngressFrom: []
 
 resources:

@@ -84,6 +84,33 @@ export class KubeApi {
     return (await this.send('GET', path)).toString('utf8');
   }
 
+  /**
+   * Streams a plain-text resource into `sink` as it comes, such as a pod's log with
+   * `follow=true`; resolves when the server ends it, e.g. once the container exits.
+   * `sink` is not ended.
+   */
+  async stream(path: string, sink: NodeJS.WritableStream, signal?: AbortSignal): Promise<void> {
+    const url = new URL(path, this.connection.server);
+    const token = await this.connection.token();
+    const headers: Record<string, string> = { Accept: '*/*' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const transport = url.protocol === 'http:' ? http : https;
+    return new Promise((resolve, reject) => {
+      const req = transport.request(url, { method: 'GET', headers, ca: this.connection.ca, signal }, (res) => {
+        const status = res.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          res.resume();
+          return reject(new KubeApiError(status, '', `Kubernetes API GET ${url.pathname}: ${status}`));
+        }
+        res.on('data', (c: Buffer) => sink.write(c));
+        res.on('end', () => resolve());
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
   private async json<T>(method: string, path: string, body?: unknown, contentType = 'application/json'): Promise<T> {
     const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
     return JSON.parse((await this.send(method, path, payload, contentType)).toString('utf8')) as T;

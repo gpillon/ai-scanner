@@ -18,10 +18,7 @@ models from the admin UI, where API keys are stored encrypted. The NOTES printed
 ## What it creates
 
 - **Server Deployment**, one replica with the `Recreate` strategy: the database is SQLite
-  and the Scan supervisor runs in-process. The pod has two containers:
-  - `server`, the API and the web UI (`/ui/`);
-  - `egress-proxy`, the agents' only way out. Before each Attempt the server writes the
-    proxy's allow list, the Model Pool's endpoints, into a volume the two containers share.
+  and the Scan supervisor runs in-process. It serves the API and the web UI (`/ui/`).
 - **A PersistentVolumeClaim** for the data directory. Agent pods mount it too: workspace and
   skills read-only, `/output` writable. With a ReadWriteOnce volume they are scheduled on
   the server's node; with ReadWriteMany, anywhere. The claim is kept on `helm uninstall`.
@@ -29,11 +26,14 @@ models from the admin UI, where API keys are stored encrypted. The NOTES printed
   - use a read-only root filesystem, no capabilities and seccomp `RuntimeDefault`;
   - have no ServiceAccount token and no service links;
   - get the model key from a Secret per Attempt, owned by the pod.
-- **NetworkPolicies**. Agent pods reach only the egress proxy and DNS, and nothing reaches
-  them. Only agent pods reach the proxy port. They need a CNI that enforces NetworkPolicy
-  (OVN-Kubernetes, Calico, Cilium, ...).
-- **A namespaced Role** for the server: pods, `pods/log`, secrets, and read access to
-  services and persistentvolumeclaims. Nothing is cluster-scoped.
+- **An egress proxy pod per Attempt**, also created by the server. It runs the server image
+  and lets through only that Scan's model endpoint. The agent reaches it by IP.
+- **NetworkPolicies**. The chart denies agent pods everything, DNS included, and keeps proxy
+  pods unreachable. For each Attempt the server adds a pair: its agent may reach its own
+  proxy, and nothing else may. They need a CNI that enforces NetworkPolicy (OVN-Kubernetes,
+  Calico, Cilium, ...).
+- **A namespaced Role** for the server: pods, `pods/log`, secrets, networkpolicies, and
+  read access to persistentvolumeclaims. Nothing is cluster-scoped.
 
 ## What the server discovers by itself
 
@@ -45,7 +45,7 @@ models from the admin UI, where API keys are stored encrypted. The NOTES printed
 | Data claim | the volume mounted at the data directory | `SCANNER_K8S_DATA_CLAIM` |
 | Node pinning | the claim's access mode | `SCANNER_K8S_COLOCATE` (`auto`/`always`/`never`) |
 | Agent image | its own image, `ai-scanner` → `ai-scanner-agent`, same tag | `agent.image` |
-| Egress proxy | the Service selecting it with a port named `egress` | `SCANNER_K8S_EGRESS_PROXY` |
+| Proxy image | its own image, which ships the proxy | `SCANNER_K8S_PROXY_IMAGE` |
 | Pull secrets, fsGroup, UID | its own pod | |
 
 The chart detects OpenShift through `security.openshift.io` and adapts:
@@ -85,7 +85,8 @@ make release-push VERSION=0.2.0  # pushes main and the tag
 
 On the tag, CI builds and pushes both images as `0.2.0`. `.github/workflows/helm-release.yml`
 then lints the chart, renders it for Kubernetes and for OpenShift, and validates both with
-kubeconform. Finally it adds `ai-scanner-0.2.0.tgz` to the `gh-pages` branch and merges its
-entry into the existing `index.yaml`: one repository URL lists every version released so
-far, and a published version is never overwritten. It also attaches the package to the
-GitHub release. Changes to the chart outside a tag are linted, never published.
+kubeconform. Finally it adds `ai-scanner-0.2.0.tgz` to the `gh-pages` branch, the archive of
+every release, merges its entry into the existing `index.yaml`, and deploys the archive to
+GitHub Pages (Settings > Pages > Source: GitHub Actions). One repository URL lists every
+version released so far, and a published version is never overwritten. It also attaches the
+package to the GitHub release. Changes to the chart outside a tag are linted, never published.

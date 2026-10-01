@@ -22,10 +22,14 @@ Each of these can still be set explicitly.
   - no ServiceAccount token and no service links.
 
   The model key goes into a Secret per Attempt, owned by its pod, and never into the pod spec. A pod that can never start (an image pull error, a configuration error, a node that cannot schedule it) ends the Attempt at once, without waiting for its timeout.
-- **Egress through a sidecar.** The egress proxy is a second container of the server pod, running the same image. The server writes the allow list into an emptyDir the two containers share, as the Podman Runner does with its directory (ADR-0006). The proxy rereads it on every connection, so a change applies at the next Attempt. A ConfigMap was ruled out because the kubelet takes up to a minute to propagate it; a control endpoint was ruled out because agents could reach it. NetworkPolicies:
-  - let agent pods reach only the proxy port and DNS;
-  - let nothing reach the agent pods;
-  - let only agent pods reach the proxy port.
+- **An egress proxy per Attempt.** Each Attempt gets its own proxy pod, running the server's image. Its allow list is only the Scan's model endpoint (`AttemptRequest.modelEgress`), fixed at start: no file, no reload, no control endpoint. Each agent can reach its own model, and no other in the pool. NetworkPolicies:
+  - The chart denies agent pods all ingress and all egress, DNS included. Nothing may reach proxy pods.
+  - For each Attempt, the server adds two policies before starting either pod: its agent may reach its proxy's port, and only that agent may reach that proxy.
+  - Policies only add up, so an agent can never reach another Attempt's proxy.
+  - The agent is given the proxy's pod IP, so it needs no DNS at all, which also closes DNS as a way out.
+  - Proxy pods keep their egress, to reach the model.
+
+  The proxy is a pod of its own, not a container in the agent pod: containers share their pod's network, so the agent could bypass a proxy beside it, and redirecting its traffic would need `NET_ADMIN`.
 
 ## Consequences
 
@@ -40,5 +44,5 @@ Each of these can still be set explicitly.
 ## Considered Options
 
 - **Copying the workspace into the pod over the API** (exec and tar, or an init container downloading from the server) was rejected. It needs either a writable channel from agent pods back to the server, or exec rights and a keep-alive container. A shared volume needs neither.
-- **The proxy as a Deployment of its own, with its allow list in a ConfigMap,** was rejected for the propagation delay above. It would also add an image and a Deployment for something the server already ships.
+- **One shared proxy for all Attempts** (a sidecar of the server, rereading an allow list the server rewrites) came first. It was replaced because every agent could then reach every model in the pool. A shared proxy as a Deployment with its allow list in a ConfigMap was worse still: the kubelet takes up to a minute to propagate a change.
 - **A Job per Attempt** was rejected: it brings retries, back-off and history that compete with the supervisor's.

@@ -1,6 +1,7 @@
 {{- if .Values.networkPolicy.enabled }}
-# Agent pods run code-reading agents on untrusted Source Archives (ADR-0003): they reach the
-# egress proxy and DNS, and nothing else; nothing reaches them.
+# Agent pods run code-reading agents on untrusted Source Archives (ADR-0003, ADR-0007). The chart
+# denies them everything, DNS included. For each Attempt the server adds two NetworkPolicies:
+# its agent may reach its own egress proxy pod, and only its agent may reach that proxy.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -13,24 +14,26 @@ spec:
       {{- include "ai-scanner.agentSelectorLabels" . | nindent 6 }}
   policyTypes: [Ingress, Egress]
   ingress: []
-  egress:
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "ai-scanner.serverSelectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.egressProxy.port }}
-          protocol: TCP
-    - to:
-        - namespaceSelector:
-            {{- toYaml .Values.networkPolicy.dnsNamespaceSelector | nindent 12 }}
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
-        - { port: 5353, protocol: UDP }
-        - { port: 5353, protocol: TCP }
+  egress: []
 ---
-# The server pod: its API to whoever may reach it, its egress proxy to agent pods only.
+# Each Attempt's egress proxy: nothing reaches it but its own agent (allowed per Attempt). Its
+# egress stays open, to reach the model endpoint it lets through.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ai-scanner.fullname" . }}-egress-proxy
+  labels:
+    {{- include "ai-scanner.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-scanner.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: egress-proxy
+  policyTypes: [Ingress]
+  ingress: []
+{{- with .Values.networkPolicy.apiIngressFrom }}
+---
+# The API port, to the sources allowed (by default the server takes ingress from anywhere).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -43,18 +46,10 @@ spec:
       {{- include "ai-scanner.serverSelectorLabels" . | nindent 6 }}
   policyTypes: [Ingress]
   ingress:
-    - ports:
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
         - port: 3000
           protocol: TCP
-      {{- with .Values.networkPolicy.apiIngressFrom }}
-      from:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "ai-scanner.agentSelectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.egressProxy.port }}
-          protocol: TCP
+{{- end }}
 {{- end }}

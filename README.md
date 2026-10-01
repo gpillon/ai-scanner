@@ -120,7 +120,7 @@ Environment variables, read at startup. `.env.example` has a starting point.
 | `SCANNER_AGENT_MEMORY` | `4g` | Memory limit per agent container |
 | `SCANNER_PODMAN` | `podman` | Podman executable |
 | `SCANNER_K8S_DATA_CLAIM` | discovered | Kubernetes: the claim holding the data directory |
-| `SCANNER_K8S_EGRESS_PROXY` | discovered | Kubernetes: the egress proxy URL agent pods use |
+| `SCANNER_K8S_PROXY_IMAGE` | the server's image | Kubernetes: image of each Attempt's egress proxy pod |
 | `SCANNER_K8S_COLOCATE` | `auto` | Kubernetes: pin agent pods to the server's node (`auto`: unless the claim is ReadWriteMany) |
 | `SCANNER_K8S_AGENT_SERVICE_ACCOUNT` | namespace default | Kubernetes: ServiceAccount of agent pods |
 | `SCANNER_K8S_AGENT_MEMORY` / `SCANNER_K8S_AGENT_CPU` | `4Gi` / `2` | Kubernetes: limits per agent pod |
@@ -166,7 +166,7 @@ helm repo add ai-scanner https://gpillon.github.io/ai-scanner
 helm install scanner ai-scanner/ai-scanner -n ai-scanner --create-namespace
 ```
 
-The server runs the Kubernetes Runner ([ADR-0007](docs/adr/0007-kubernetes-runner.md)). Each Attempt is a hardened pod in the same namespace, mounting the server's data volume, and it reaches the models only through the egress proxy, a sidecar of the server, under NetworkPolicies. The server discovers its own setup from its pod: data claim, node, agent image, pull secrets and egress Service.
+The server runs the Kubernetes Runner ([ADR-0007](docs/adr/0007-kubernetes-runner.md)). Each Attempt is a hardened pod in the same namespace, mounting the server's data volume, and it reaches the network only through its own egress proxy pod, which lets through only the Scan's model, under NetworkPolicies: no DNS, nothing else. The server discovers its own setup from its pod: data claim, node, images and pull secrets.
 
 ## CI
 
@@ -191,9 +191,9 @@ make release-push VERSION=0.2.0  # pushes main and the tag
 On the tag:
 
 - CI pushes both images as `0.2.0`.
-- The chart `0.2.0` is added to the `gh-pages` branch, and its entry is merged into the same `index.yaml`. The Helm repository at `https://<owner>.github.io/<repo>` keeps every version released, and a published version is never overwritten.
+- The chart `0.2.0` joins every earlier one in the `gh-pages` branch, which serves as the archive, and its entry is merged into the same `index.yaml`. The whole archive is then deployed to GitHub Pages: the Helm repository at `https://<owner>.github.io/<repo>` lists every version released, and a published version is never overwritten.
 
-One-time setup: create the `gh-pages` branch and enable GitHub Pages from it.
+One-time setup: Settings > Pages > Source: GitHub Actions. The `gh-pages` branch is created on the first release.
 
 ## Tests
 
