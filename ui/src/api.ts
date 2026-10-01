@@ -16,6 +16,8 @@ export interface ScanStatus {
   failureReason?: string;
   /** The Skill Packs the Scan added to its profile, with the skills each gave it. */
   skillPacks?: { id: string; skills: { name: string; hash: string }[] }[];
+  /** When the code came from a Git repository (ADR-0010). */
+  source?: { type: 'git'; url: string; ref: string | null; commit: string };
   artifacts?: string[];
 }
 
@@ -31,9 +33,23 @@ export interface Model {
   default: boolean;
 }
 
+/** Credentials of a private Git repository: kept in the form only, sent with each request. */
+export interface GitCredentials {
+  username?: string;
+  token?: string;
+}
+
+export interface GitRefs {
+  default: string | null;
+  branches: string[];
+  tags: string[];
+}
+
 export interface NewScan {
   id: string;
-  file: File;
+  /** A Source Archive, or else `repo`. */
+  file?: File;
+  repo?: { url: string; ref?: string; credentials?: GitCredentials };
   profile: string;
   model?: string;
   language?: string;
@@ -211,10 +227,19 @@ export const api = {
     if (scan.language) form.append('language', scan.language);
     if (scan.instructions) form.append('instructions', scan.instructions);
     if (scan.skillPacks?.length) form.append('skillPacks', scan.skillPacks.join(','));
-    form.append('file', scan.file, scan.file.name);
+    if (scan.file) form.append('file', scan.file, scan.file.name);
+    if (scan.repo) {
+      form.append('repoUrl', scan.repo.url);
+      if (scan.repo.ref) form.append('ref', scan.repo.ref);
+      if (scan.repo.credentials?.username) form.append('gitUsername', scan.repo.credentials.username);
+      if (scan.repo.credentials?.token) form.append('gitToken', scan.repo.credentials.token);
+    }
     const res = await request(`/api/scan/${encodeURIComponent(scan.id)}`, { method: 'POST', body: form });
     return res.json();
   },
+
+  gitRefs: async (url: string, credentials: GitCredentials = {}): Promise<GitRefs> =>
+    (await send('POST', '/api/git/refs', { url, ...credentials })).json(),
 
   async deleteScan(id: string): Promise<void> {
     await request(`/api/scan/${encodeURIComponent(id)}`, { method: 'DELETE' });

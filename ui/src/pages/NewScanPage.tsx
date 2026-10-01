@@ -19,11 +19,14 @@ import {
   TextArea,
   TextInput,
   Title,
+  ToggleGroup,
+  ToggleGroupItem,
   Content,
 } from '@patternfly/react-core';
 import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, SCAN_ID_PATTERN, type Model, type Profile, type SkillPack } from '../api';
+import { emptyGitSource, GitSourceFields, type GitSourceValue } from '../components/GitSourceFields';
 import { TagSelect } from '../components/TagSelect';
 import { navigate, scanRoute } from '../router';
 
@@ -41,6 +44,8 @@ export function NewScanPage() {
   const [language, setLanguage] = useState('');
   const [instructions, setInstructions] = useState('');
   const [file, setFile] = useState<File>();
+  const [sourceKind, setSourceKind] = useState<'zip' | 'git'>('zip');
+  const [git, setGit] = useState<GitSourceValue>(emptyGitSource);
   const [packs, setPacks] = useState<SkillPack[]>([]);
   const [chosenPacks, setChosenPacks] = useState<string[]>([]);
 
@@ -61,18 +66,27 @@ export function NewScanPage() {
   }, []);
 
   const idValid = SCAN_ID_PATTERN.test(id);
-  const canSubmit = idValid && Boolean(profile) && Boolean(file) && !submitting;
+  const hasSource = sourceKind === 'zip' ? Boolean(file) : Boolean(git.url.trim());
+  const canSubmit = idValid && Boolean(profile) && hasSource && !submitting;
   const selectedProfile = profiles?.find((p) => p.name === profile);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!file || !canSubmit) return;
+    if (!canSubmit) return;
     setSubmitting(true);
     setSubmitError(undefined);
     try {
       const scan = await api.createScan({
         id,
-        file,
+        ...(sourceKind === 'zip'
+          ? { file }
+          : {
+              repo: {
+                url: git.url.trim(),
+                ref: git.ref.trim() || undefined,
+                credentials: { username: git.username.trim() || undefined, token: git.token || undefined },
+              },
+            }),
         profile,
         model,
         language: language.trim(),
@@ -106,6 +120,28 @@ export function NewScanPage() {
               !loadError && <Skeleton height="300px" screenreaderText="Loading" />
             ) : (
               <Form onSubmit={submit} isWidthLimited>
+                <FormGroup label="Source" fieldId="source-kind" role="radiogroup">
+                  <ToggleGroup aria-label="Source">
+                    <ToggleGroupItem
+                      text="Zip archive"
+                      buttonId="source-zip"
+                      isSelected={sourceKind === 'zip'}
+                      onChange={() => setSourceKind('zip')}
+                      isDisabled={submitting}
+                    />
+                    <ToggleGroupItem
+                      text="Git repository"
+                      buttonId="source-git"
+                      isSelected={sourceKind === 'git'}
+                      onChange={() => setSourceKind('git')}
+                      isDisabled={submitting}
+                    />
+                  </ToggleGroup>
+                </FormGroup>
+
+                {sourceKind === 'git' ? (
+                  <GitSourceFields value={git} onChange={setGit} isDisabled={submitting} />
+                ) : (
                 <FormGroup label="Source Archive" isRequired fieldId="archive">
                   <FileUpload
                     id="archive"
@@ -127,6 +163,7 @@ export function NewScanPage() {
                     </HelperText>
                   </FormHelperText>
                 </FormGroup>
+                )}
 
                 <FormGroup label="Scan Profile" isRequired fieldId="profile">
                   <FormSelect id="profile" value={profile} onChange={(_e, v) => setProfile(v)} isDisabled={submitting}>

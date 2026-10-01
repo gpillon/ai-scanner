@@ -233,6 +233,21 @@ export function ScanDetailPage({ id, tab }: { id: string; tab: ScanTab }) {
                               <DescriptionListTerm>Language</DescriptionListTerm>
                               <DescriptionListDescription>{scan.language}</DescriptionListDescription>
                             </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Source</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                {scan.source ? (
+                                  <>
+                                    <code className="app-break">{scan.source.url}</code>
+                                    <div className="app-subtle">
+                                      {scan.source.ref ?? 'default branch'} · commit <code>{scan.source.commit.slice(0, 12)}</code>
+                                    </div>
+                                  </>
+                                ) : (
+                                  'Zip archive'
+                                )}
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
                             {scan.skillPacks && (
                               <DescriptionListGroup>
                                 <DescriptionListTerm>Skill Packs</DescriptionListTerm>
