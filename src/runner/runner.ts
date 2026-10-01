@@ -41,6 +41,8 @@ export interface AgentModel {
   apiKey?: string;
   /** Or the server environment variable holding it. */
   apiKeyEnv?: string;
+  /** Provider-specific settings the model runs with (the Scan's model options), as opencode takes them. */
+  options?: Record<string, unknown>;
 }
 
 export interface AttemptResult {

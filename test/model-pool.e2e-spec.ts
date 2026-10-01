@@ -157,8 +157,8 @@ describe('Model Pool administration', () => {
       h = await startApp();
       expect((await h.admin.patch('/api/admin/models/deep-model').send({ default: true })).body).toMatchObject({ default: true });
       expect((await h.api.get('/api/models')).body).toEqual([
-        { id: 'fast-model', provider: 'openai-compatible', default: false },
-        { id: 'deep-model', provider: 'anthropic', default: true },
+        { id: 'fast-model', provider: 'openai-compatible', default: false, options: ['thinking', 'thinkingLevel'] },
+        { id: 'deep-model', provider: 'anthropic', default: true, options: ['thinking', 'thinkingLevel'] },
       ]);
       await h.admin.patch('/api/admin/models/fast-model').send({ enabled: false });
       expect((await h.api.get('/api/models')).body.map((m: any) => m.id)).toEqual(['deep-model']);

@@ -26,6 +26,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { THINKING_LEVELS } from '../models/model-options';
 import { ArchiveUploadInterceptor } from './archive-upload.interceptor';
 import { CreateScanDto } from './dto/create-scan.dto';
 import { ScanStatusDto } from './dto/scan-status.dto';
@@ -58,6 +59,8 @@ export class ScansController {
         gitToken: { type: 'string', description: 'For a private repository; never stored' },
         profile: { type: 'string' },
         model: { type: 'string' },
+        thinking: { type: 'string', enum: ['on', 'off'], description: "Whether the model thinks; the model's own behaviour otherwise" },
+        thinkingLevel: { type: 'string', enum: [...THINKING_LEVELS], description: 'With thinking=on: how much' },
         language: { type: 'string' },
         instructions: { type: 'string' },
         attemptTimeoutMinutes: { type: 'integer', minimum: 1, maximum: 1440, description: 'Minutes each Attempt may run; the server setting otherwise' },
@@ -65,7 +68,7 @@ export class ScansController {
     },
   })
   @ApiCreatedResponse({ type: ScanStatusDto, description: 'Scan accepted, in state `queued`' })
-  @ApiBadRequestResponse({ description: 'Invalid id, archive, profile, model, language, instructions or Attempt timeout' })
+  @ApiBadRequestResponse({ description: 'Invalid id, archive, profile, model, model options, language, instructions or Attempt timeout' })
   @ApiConflictResponse({ description: 'A Scan with this id already exists' })
   async create(@Param('id') id: string, @Body() body: CreateScanDto, @Req() req: { file?: { path: string } }) {
     const scan = await this.scans.create({ id, archivePath: req.file?.path, ...body });

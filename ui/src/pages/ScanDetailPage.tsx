@@ -230,6 +230,16 @@ export function ScanDetailPage({ id, tab }: { id: string; tab: ScanTab }) {
                               <DescriptionListDescription>{scan.model}</DescriptionListDescription>
                             </DescriptionListGroup>
                             <DescriptionListGroup>
+                              <DescriptionListTerm>Thinking</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                {scan.modelOptions?.thinking === 'off'
+                                  ? 'Off'
+                                  : scan.modelOptions?.thinking === 'on'
+                                    ? `On, ${scan.modelOptions.thinkingLevel ? `${scan.modelOptions.thinkingLevel} level` : "model's default level"}`
+                                    : 'Model default'}
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
                               <DescriptionListTerm>Language</DescriptionListTerm>
                               <DescriptionListDescription>{scan.language}</DescriptionListDescription>
                             </DescriptionListGroup>

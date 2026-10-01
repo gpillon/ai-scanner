@@ -8,7 +8,8 @@ import { Scan } from '../scans/entities/scan.entity';
 import { PoolModel } from './entities/pool-model.entity';
 import { PoolSeed } from './entities/pool-seed.entity';
 import { Provider } from './entities/provider.entity';
-import { endpointOf, isBuiltInKind, KIND_INFO } from './provider-kinds';
+import { ModelOptions, modelOptionsOf, opencodeModelOptions } from './model-options';
+import { endpointOf, isBuiltInKind, KIND_INFO, ProviderKind } from './provider-kinds';
 import { ProvidersService } from './providers.service';
 
 export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$/;
@@ -90,9 +91,13 @@ export class ModelPool implements OnModuleInit {
   }
 
   /** What callers may choose from: the enabled models, with the Default Model marked. */
-  async list(): Promise<{ id: string; provider: string; default: boolean }[]> {
+  async list(): Promise<{ id: string; provider: string; default: boolean; options: (keyof ModelOptions)[] }[]> {
     const models = await this.models.find({ where: { enabled: true }, order: { position: 'ASC' } });
-    return models.map((m) => ({ id: m.id, provider: m.providerId, default: m.isDefault }));
+    const kinds = new Map((await this.providerRows.find()).map((p) => [p.id, p.kind]));
+    return models.map((m) => {
+      const kind = kinds.get(m.providerId);
+      return { id: m.id, provider: m.providerId, default: m.isDefault, options: kind ? modelOptionsOf(kind) : [] };
+    });
   }
 
   /** The requested model, or the Default Model; undefined when that is not an enabled model. */
@@ -170,8 +175,17 @@ export class ModelPool implements OnModuleInit {
     await this.models.delete(id);
   }
 
-  /** How the agent reaches a model; whether or not it is enabled, since Scans may already use it. */
-  async agentModel(id: string): Promise<AgentModel> {
+  /** The kind of the Provider serving a model. */
+  async kindOf(id: string): Promise<ProviderKind> {
+    const model = await this.get(id);
+    return (await this.providers.get(model.providerId)).kind;
+  }
+
+  /**
+   * How the agent reaches a model, run with the Scan's model options; whether or not it is
+   * enabled, since Scans may already use it.
+   */
+  async agentModel(id: string, modelOptions?: ModelOptions | null): Promise<AgentModel> {
     const model = await this.models.findOneBy({ id });
     if (!model) throw new Error(`Model ${id} is not in the Model Pool`);
     const provider = await this.providers.get(model.providerId);
@@ -179,12 +193,14 @@ export class ModelPool implements OnModuleInit {
     const apiKey = this.providers.storedKey(provider);
     // Without a stored key, the same variable discovery reads: the row's, else the kind's usual one.
     const apiKeyEnv = provider.apiKeyEnv ?? KIND_INFO[provider.kind].apiKeyEnv;
+    const options = opencodeModelOptions(provider.kind, modelOptions);
     return {
       provider: builtIn ? provider.kind : provider.id,
       builtIn,
       name: model.name,
       ...(provider.baseUrl && { baseUrl: provider.baseUrl }),
       ...(apiKey ? { apiKey } : apiKeyEnv ? { apiKeyEnv } : {}),
+      ...(Object.keys(options).length && { options }),
     };
   }
 

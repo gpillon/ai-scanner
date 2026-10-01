@@ -1,4 +1,5 @@
 import { Column, Entity, PrimaryColumn } from 'typeorm';
+import type { ModelOptions } from '../../models/model-options';
 import type { TokenUsage } from '../../runner/usage';
 import type { PackSnapshot } from '../../skills/skill-packs.service';
 
@@ -28,6 +29,10 @@ export class Scan {
 
   @Column({ type: 'text' })
   model: string;
+
+  /** How the caller asked the model to run, e.g. its thinking (ADR-0013); null: the model's own way. */
+  @Column({ type: 'simple-json', nullable: true })
+  modelOptions: ModelOptions | null;
 
   @Column({ type: 'text' })
   language: string;

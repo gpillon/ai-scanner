@@ -8,6 +8,8 @@ export interface ScanStatus {
   state: ScanState;
   profile: string;
   model: string;
+  /** How the caller asked the model to run, when it chose to (ADR-0013). */
+  modelOptions?: ModelOptions;
   language: string;
   attempts: number;
   /** Minutes each Attempt may run, when the caller chose it; absent: the server setting. */
@@ -23,6 +25,16 @@ export interface ScanStatus {
   artifacts?: string[];
   /** Tokens the agent used over the Attempts so far, subagents included; absent until one reports it. */
   usage?: TokenUsage;
+}
+
+export const THINKING_LEVELS = ['low', 'medium', 'high'] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+/** How a Scan asks its model to run; a field left out is the model's own behaviour. */
+export interface ModelOptions {
+  thinking?: 'on' | 'off';
+  /** With thinking on. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface TokenUsage {
@@ -48,6 +60,8 @@ export interface Model {
   id: string;
   provider: string;
   default: boolean;
+  /** The model options a Scan may set for it, e.g. `thinking`; absent from older servers. */
+  options?: (keyof ModelOptions)[];
 }
 
 /** Credentials of a private Git repository: kept in the form only, sent with each request. */
@@ -69,6 +83,7 @@ export interface NewScan {
   repo?: { url: string; ref?: string; credentials?: GitCredentials };
   profile: string;
   model?: string;
+  modelOptions?: ModelOptions;
   language?: string;
   instructions?: string;
   skillPacks?: string[];
@@ -242,6 +257,8 @@ export const api = {
     const form = new FormData();
     form.append('profile', scan.profile);
     if (scan.model) form.append('model', scan.model);
+    if (scan.modelOptions?.thinking) form.append('thinking', scan.modelOptions.thinking);
+    if (scan.modelOptions?.thinkingLevel) form.append('thinkingLevel', scan.modelOptions.thinkingLevel);
     if (scan.language) form.append('language', scan.language);
     if (scan.instructions) form.append('instructions', scan.instructions);
     if (scan.attemptTimeoutMinutes) form.append('attemptTimeoutMinutes', String(scan.attemptTimeoutMinutes));

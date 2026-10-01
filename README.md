@@ -49,6 +49,7 @@ curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/profiles
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/models
 
 curl -H "Authorization: Bearer $TOKEN" -F file=@code.zip -F profile=security \
+     -F model=qwen3.8-27b -F thinking=on -F thinkingLevel=high \
      -F language=en -F instructions="Focus on the payment module" \
      -F skillPacks=java,frontend -F attemptTimeoutMinutes=240 \
      localhost:3000/api/scan/$ID
@@ -71,6 +72,8 @@ curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:3000/api/scan/$ID  # 
 `/events` replays what already happened, then streams `state`, `attempt` and `activity` events until the Scan finishes. An `activity` event is a one-line summary of a tool call, a piece of the agent's text or a step, never the raw transcript. opencode reports each tool call and each block of text once it is complete, so the stream moves in steps rather than token by token. Browsers' `EventSource` cannot send the bearer header, so the UI reads the stream with `fetch`.
 
 A **Git repository** can replace the zip ([ADR-0010](docs/adr/0010-scan-a-git-repository.md)). The server checks out one commit of `ref` (or the default branch) while answering the POST, and keeps it with the Scan. Credentials, for a private repository, are used for that one fetch and never stored. Prefer a read-only token; GitHub and GitLab accept it with any username, `oauth2` by default. Only https is used, symlinks arrive as plain files, Git LFS objects are not fetched, and loopback and link-local hosts are refused. Set `SCANNER_GIT_HOSTS` to restrict the hosts, since any holder of the caller token can make the server fetch from your internal network. The New Scan form offers the same, with a button that lists the repository's branches and tags.
+
+**Model options** set how the model runs, next to `model` ([ADR-0013](docs/adr/0013-model-options-chosen-per-scan.md)): `thinking` (`on` or `off`) and, with `on`, `thinkingLevel` (`low`, `medium` or `high`). Left out, the model keeps its own behaviour and nothing is sent. The server maps them to the Provider's kind: `chat_template_kwargs.enable_thinking` and `reasoning_effort` for `openai-compatible` (vLLM and SGLang serving Qwen3 and alike), reasoning effort for `openai`, adaptive thinking and effort for `anthropic`; other kinds refuse them with `400`. A model that cannot do what was chosen fails its Attempts with the provider's message. `GET /api/models` lists the options each model takes, `GET /api/scan/<id>` returns the Scan's as `modelOptions`, and the New Scan form offers them under the model.
 
 `GET /api/scan/<id>` gives the tokens the agent used as `usage`, once an Attempt has reported it ([ADR-0011](docs/adr/0011-parallel-reviewers-and-token-usage.md)). The counts are summed over the Attempts and include every subagent: `input`, `output`, `reasoning`, `cacheRead`, `cacheWrite`, `total`, the `cost` the provider reports (0 when it reports none), and the number of agent `sessions`. They are never in the Report or the Findings. The UI shows them in the Scan's Overview.
 

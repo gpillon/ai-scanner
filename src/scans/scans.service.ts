@@ -7,6 +7,7 @@ import { Repository } from 'typeorm';
 import { ArtifactStore } from '../artifacts/artifact-store';
 import { Clock } from '../common/clock';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
+import { ModelOptions, ThinkingLevel, unsupportedModelOptions } from '../models/model-options';
 import { ModelPool } from '../models/model-pool.service';
 import { paths } from '../common/paths';
 import { ProfileRegistry } from '../profiles/profile-registry.service';
@@ -34,6 +35,9 @@ export interface CreateScanInput {
   gitToken?: string;
   profile: string;
   model?: string;
+  /** Model options: see ModelOptions. */
+  thinking?: 'on' | 'off';
+  thinkingLevel?: ThinkingLevel;
   language?: string;
   instructions?: string;
   skillPacks?: string[];
@@ -86,6 +90,12 @@ export class ScansService {
         input.model ? `Model is not in the Model Pool: ${input.model}` : 'The Model Pool has no Default Model: choose a model',
       );
     }
+    const modelOptions: ModelOptions = {
+      ...(input.thinking && { thinking: input.thinking }),
+      ...(input.thinkingLevel && { thinkingLevel: input.thinkingLevel }),
+    };
+    const unsupported = unsupportedModelOptions(await this.models.kindOf(model), modelOptions);
+    if (unsupported) throw new BadRequestException(unsupported);
     const packs = input.skillPacks?.length ? await this.skillPacks.resolve(input.skillPacks) : [];
     const instructions = input.instructions || null;
     if (instructions && instructions.length > this.config.maxInstructionsLength) {
@@ -97,6 +107,7 @@ export class ScansService {
       state: 'queued',
       profile: input.profile,
       model,
+      modelOptions: Object.keys(modelOptions).length ? modelOptions : null,
       language: input.language ?? this.config.defaultLanguage,
       instructions,
       attempts: 0,

@@ -289,7 +289,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
         let modelEgress: string[];
         try {
           [agentModel, egress, modelEgress] = await Promise.all([
-            this.pool.agentModel(scan.model),
+            this.pool.agentModel(scan.model, scan.modelOptions),
             this.pool.endpoints(),
             this.pool.modelEndpoints(scan.model),
           ]);

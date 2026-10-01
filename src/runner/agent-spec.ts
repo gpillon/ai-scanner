@@ -89,7 +89,8 @@ const LEAD_READ = {
 };
 
 /**
- * The opencode configuration of an Attempt: the chosen model, and tools limited to reading the
+ * The opencode configuration of an Attempt: the chosen model, with the options it runs with, which
+ * opencode merges over its own for that model, and tools limited to reading the
  * workspace and the skills, and writing under /output. Every rule resolves to allow or deny:
  * `opencode run` rejects what would ask, and ends the Attempt. The main agent may hand parts of
  * the work to `reviewer` subagents, which run in parallel and can only read; when the Scan
@@ -109,8 +110,13 @@ export function opencodeConfig(model: AgentModel, withSkills: boolean, leadReads
     enabled_providers: [model.provider],
     provider: {
       [model.provider]: model.builtIn
-        ? { options }
-        : { npm: '@ai-sdk/openai-compatible', name: model.provider, options, models: { [model.name]: { tool_call: true } } },
+        ? { options, ...(model.options && { models: { [model.name]: { options: model.options } } }) }
+        : {
+            npm: '@ai-sdk/openai-compatible',
+            name: model.provider,
+            options,
+            models: { [model.name]: { tool_call: true, ...(model.options && { options: model.options }) } },
+          },
     },
     ...(withSkills && { skills: { paths: [IN_CONTAINER.skills] } }),
     autoupdate: false,

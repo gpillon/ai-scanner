@@ -61,3 +61,7 @@ _Avoid_: Backend, endpoint, vendor
 **Default Model**:
 The Model Pool entry a Scan uses when the caller does not ask for a specific one.
 _Avoid_: Fallback model
+
+**Model Options**:
+How a Scan asks its model to run, over the model's own defaults: first, whether it thinks and how much (ADR-0013). The Model Pool maps them to what the Provider's kind understands.
+_Avoid_: Model parameters, variant
