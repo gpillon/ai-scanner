@@ -1,14 +1,15 @@
 name: Helm chart
 
 # Lints the chart on every change to it, and publishes it on every release tag (`vX.Y.Z`, see
-# `make release`) to the gh-pages branch, served by GitHub Pages as a Helm repository:
+# `make release`) as a Helm repository on GitHub Pages:
 #   helm repo add ai-scanner https://<owner>.github.io/<repo>
 #
-# The repository is incremental: each release adds its package next to the earlier ones and
-# merges its entry into the same index.yaml, so the index lists every version ever released.
-# A version already published is never overwritten.
+# The repository is incremental. The gh-pages branch archives every package released, and the
+# index.yaml listing them all. Each release adds its package there and merges its entry into
+# that index, then deploys the whole archive to Pages. A version already published is never
+# overwritten. The branch is created on the first release.
 #
-# One-time setup: create the `gh-pages` branch (empty is fine) and enable Pages from it.
+# One-time setup: Settings > Pages > Source: GitHub Actions.
 
 on:
   push:
@@ -73,6 +74,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     env:
       TAG: ${{ github.ref_name }}
       GH_TOKEN: ${{ github.token }}
@@ -100,13 +106,21 @@ jobs:
       - name: Package
         run: helm package charts/ai-scanner --destination dist-chart
 
-      - uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-          path: pages
+      # The archive of every release: the gh-pages branch, created empty on the first release.
+      - name: Check out the archive
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          if git ls-remote --exit-code --heads "$remote" gh-pages >/dev/null; then
+            git clone --quiet --depth 1 --branch gh-pages "$remote" pages
+          else
+            git init --quiet -b gh-pages pages
+            git -C pages remote add origin "$remote"
+          fi
 
       # Adds this version next to the earlier ones and merges its entry into the existing index.
-      - name: Add to the Helm repository
+      - name: Add this version
         run: |
           owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
           url="https://${owner}.github.io/${{ github.event.repository.name }}"
@@ -122,14 +136,19 @@ jobs:
           helm repo index dist-chart --url "$url/charts" $merge
           cp dist-chart/index.yaml pages/index.yaml
           touch pages/.nojekyll
-          cd pages
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add charts index.yaml .nojekyll
-          git commit -m "Publish the ai-scanner chart ${{ steps.version.outputs.version }}"
-          git push origin gh-pages
-          grep -A2 '^  ai-scanner:' index.yaml | head -3
-          echo "Versions in the index: $(grep -c '^  - ' index.yaml || true)"
+          git -C pages add charts index.yaml .nojekyll
+          git -C pages commit --quiet -m "Publish the ai-scanner chart ${{ steps.version.outputs.version }}"
+          git -C pages push --quiet origin gh-pages
+          echo "Versions in the index: $(grep -c '^    version:' pages/index.yaml)"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
 
       - name: Attach the chart to the GitHub release
         run: |
