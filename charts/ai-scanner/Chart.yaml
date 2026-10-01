@@ -4,8 +4,8 @@ description: >-
   HTTP service that runs an AI coding agent on uploaded source code and returns a Report.
   Each Scan Attempt runs as an isolated agent pod, in the release's namespace.
 type: application
-version: 0.3.0
-appVersion: "0.3.0"
+version: 0.4.0
+appVersion: "0.4.0"
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/gpillon/ai-scanner
 sources:
