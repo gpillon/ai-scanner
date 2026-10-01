@@ -62,8 +62,12 @@ export class ScansService {
     if (!input.archivePath) throw new BadRequestException('Source Archive is required (multipart field "file")');
     if (!(await looksLikeZip(input.archivePath))) throw new BadRequestException('Source Archive must be a zip file');
     if (!this.profiles.get(input.profile)) throw new BadRequestException(`Unknown Scan Profile: ${input.profile}`);
-    const model = this.models.resolve(input.model);
-    if (!model) throw new BadRequestException(`Model is not in the Model Pool: ${input.model}`);
+    const model = await this.models.resolve(input.model);
+    if (!model) {
+      throw new BadRequestException(
+        input.model ? `Model is not in the Model Pool: ${input.model}` : 'The Model Pool has no Default Model: choose a model',
+      );
+    }
     const instructions = input.instructions || null;
     if (instructions && instructions.length > this.config.maxInstructionsLength) {
       throw new BadRequestException(`Instructions exceed ${this.config.maxInstructionsLength} characters`);

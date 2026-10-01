@@ -16,6 +16,25 @@ export interface AttemptRequest {
   skillsDir?: string;
   /** Model Pool id. */
   model: string;
+  /** How the agent reaches that model. */
+  agentModel: AgentModel;
+  /** Every `host:port` the Model Pool's models are served from: what the agent may reach. */
+  egress: string[];
+}
+
+/** A Model Pool model as the agent needs it. */
+export interface AgentModel {
+  /** The provider name opencode knows it by: the kind for built-in providers, else the Provider id. */
+  provider: string;
+  /** Whether opencode ships that provider, or serves it as OpenAI-compatible. */
+  builtIn: boolean;
+  /** The model's name at the provider. */
+  name: string;
+  baseUrl?: string;
+  /** The key itself (from the DB): the Runner passes it as an environment variable, never as an argument. */
+  apiKey?: string;
+  /** Or the server environment variable holding it. */
+  apiKeyEnv?: string;
 }
 
 export interface AttemptResult {

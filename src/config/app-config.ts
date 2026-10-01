@@ -35,6 +35,8 @@ export interface AppConfig {
   token: string;
   /** Opens the admin routes as well (ADR-0006); without it, administration is disabled. */
   adminToken?: string;
+  /** Encrypts the Provider API keys stored in the database; without it, keys cannot be stored. */
+  secretKey?: string;
   /** `podman` runs the agent in a container per Attempt; `fake` writes a placeholder Report. */
   runner: RunnerKind;
   podman: PodmanConfig;
@@ -42,8 +44,9 @@ export interface AppConfig {
   profilesDir: string;
   /** The built web UI, served under /ui/ when the directory exists. */
   uiDir?: string;
+  /** SCANNER_MODELS: seeds the Model Pool on the first start, and is ignored after that. */
   models: ModelEntry[];
-  defaultModel: string;
+  defaultModel?: string;
   defaultLanguage: string;
   maxArchiveBytes: number;
   /** The Source Archive may extract to at most this many bytes... */
@@ -93,11 +96,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const adminToken = env.SCANNER_ADMIN_TOKEN || undefined;
   if (adminToken === token) throw new Error('SCANNER_ADMIN_TOKEN must differ from SCANNER_TOKEN');
 
+  // Only seeds the Model Pool on the very first start (ADR-0006); the admin manages it after that.
   const models: ModelEntry[] = env.SCANNER_MODELS ? JSON.parse(env.SCANNER_MODELS) : [];
-  const defaultModel = env.SCANNER_DEFAULT_MODEL ?? models[0]?.id;
-  if (!defaultModel || !models.some((m) => m.id === defaultModel)) {
-    throw new Error('SCANNER_MODELS must be non-empty and contain SCANNER_DEFAULT_MODEL');
+  const defaultModel = env.SCANNER_DEFAULT_MODEL || models[0]?.id;
+  if (models.length && !models.some((m) => m.id === defaultModel)) {
+    throw new Error('SCANNER_DEFAULT_MODEL must be one of SCANNER_MODELS');
   }
+  const secretKey = env.SCANNER_SECRET_KEY || undefined;
+  if (secretKey && secretKey.length < 16) throw new Error('SCANNER_SECRET_KEY must be at least 16 characters');
 
   const runner = (env.SCANNER_RUNNER || 'podman') as RunnerKind;
   if (!RUNNER_KINDS.includes(runner)) {
@@ -107,6 +113,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     token,
     adminToken,
+    secretKey,
     runner,
     podman: {
       executable: env.SCANNER_PODMAN || 'podman',

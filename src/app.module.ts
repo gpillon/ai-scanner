@@ -8,6 +8,9 @@ import { CoreModule } from './core/core.module';
 import { ModelsModule } from './models/models.module';
 import { ProfilesModule } from './profiles/profiles.module';
 import { Runner } from './runner/runner';
+import { PoolModel } from './models/entities/pool-model.entity';
+import { PoolSeed } from './models/entities/pool-seed.entity';
+import { Provider } from './models/entities/provider.entity';
 import { Scan } from './scans/entities/scan.entity';
 import { ScansModule } from './scans/scans.module';
 
@@ -27,7 +30,7 @@ export class AppModule {
         TypeOrmModule.forRoot({
           type: 'better-sqlite3',
           database: paths.database(config.dataDir),
-          entities: [Scan],
+          entities: [Scan, Provider, PoolModel, PoolSeed],
           synchronize: true, // PoC: the schema is one table
         }),
         ScansModule.register(overrides.runner),

@@ -1,5 +1,6 @@
 import { Logger, OnModuleInit } from '@nestjs/common';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,7 +8,8 @@ import { join, resolve } from 'node:path';
 import { APP_ROOT } from '../common/app-root';
 import { paths } from '../common/paths';
 import { AppConfig, ModelEntry, PodmanConfig } from '../config/app-config';
-import { AttemptRequest, AttemptResult, Runner } from './runner';
+import { endpointOf, isBuiltInKind, KIND_INFO } from '../models/provider-kinds';
+import { AgentModel, AttemptRequest, AttemptResult, Runner } from './runner';
 
 /** Agent containers join only this network: it has no route out of the host. */
 const AGENT_NETWORK = 'ai-scanner-agents';
@@ -20,32 +22,15 @@ export const SCAN_LABEL = 'ai-scanner.scan';
 
 const PROXY_SCRIPT = resolve(APP_ROOT, 'containers', 'egress-proxy', 'proxy.js');
 
-/**
- * Providers opencode ships with, and where they send requests unless the Model Pool gives a
- * `baseUrl`. Any other provider is treated as OpenAI-compatible: opencode bundles that SDK,
- * whereas others would be downloaded at runtime, which the egress proxy forbids.
- */
-const PROVIDER_ENDPOINTS: Record<string, string> = {
-  anthropic: 'api.anthropic.com:443',
-  openai: 'api.openai.com:443',
-  google: 'generativelanguage.googleapis.com:443',
-  mistral: 'api.mistral.ai:443',
-  groq: 'api.groq.com:443',
-  xai: 'api.x.ai:443',
-  openrouter: 'openrouter.ai:443',
-};
-
-/** The `host:port` a Model Pool entry's requests go to. */
+/** The `host:port` a SCANNER_MODELS entry's requests go to. */
 export function modelEndpoint(model: ModelEntry): string {
-  if (model.baseUrl) {
-    const url = new URL(model.baseUrl);
-    // Without the brackets of an IPv6 literal, as the egress proxy compares hosts.
-    return `${url.hostname.replace(/^\[|\]$/g, '')}:${url.port || (url.protocol === 'http:' ? 80 : 443)}`;
-  }
-  const known = PROVIDER_ENDPOINTS[model.provider];
-  if (!known) throw new Error(`Model ${model.id}: provider ${model.provider} needs a baseUrl in SCANNER_MODELS`);
-  return known;
+  const url = model.baseUrl ?? (isBuiltInKind(model.provider) ? KIND_INFO[model.provider].defaultBaseUrl : undefined);
+  if (!url) throw new Error(`Model ${model.id}: provider ${model.provider} needs a baseUrl in SCANNER_MODELS`);
+  return endpointOf(url);
 }
+
+/** The env var the agent finds a key stored in the database under (see withSecrets). */
+const STORED_KEY_ENV = 'SCANNER_MODEL_API_KEY';
 
 /** Paths inside the agent container. */
 const IN_CONTAINER = {
@@ -61,16 +46,17 @@ const IN_CONTAINER = {
  * `opencode run` rejects what would ask, and ends the Attempt.
  */
 /** How opencode names the model: `provider/model`. */
-function modelRef(model: ModelEntry): string {
-  return `${model.provider}/${model.id}`;
+function modelRef(model: AgentModel): string {
+  return `${model.provider}/${model.name}`;
 }
 
-function opencodeConfig(model: ModelEntry, withSkills: boolean): object {
+function opencodeConfig(model: AgentModel, withSkills: boolean): object {
   const ref = modelRef(model);
-  const builtIn = model.provider in PROVIDER_ENDPOINTS;
+  const builtIn = model.builtIn;
+  const keyEnv = model.apiKey ? STORED_KEY_ENV : model.apiKeyEnv;
   const options = {
     ...(model.baseUrl && { baseURL: model.baseUrl }),
-    ...(model.apiKeyEnv && { apiKey: `{env:${model.apiKeyEnv}}` }),
+    ...(keyEnv && { apiKey: `{env:${keyEnv}}` }),
   };
   return {
     $schema: 'https://opencode.ai/config.json',
@@ -80,7 +66,7 @@ function opencodeConfig(model: ModelEntry, withSkills: boolean): object {
     provider: {
       [model.provider]: builtIn
         ? { options }
-        : { npm: '@ai-sdk/openai-compatible', name: model.provider, options, models: { [model.id]: { tool_call: true } } },
+        : { npm: '@ai-sdk/openai-compatible', name: model.provider, options, models: { [model.name]: { tool_call: true } } },
     },
     ...(withSkills && { skills: { paths: [IN_CONTAINER.skills] } }),
     autoupdate: false,
@@ -124,18 +110,16 @@ interface RunningAttempt {
 export class PodmanRunner extends Runner implements OnModuleInit {
   private readonly log = new Logger(PodmanRunner.name);
   private readonly podman: PodmanConfig;
-  private readonly models: Map<string, ModelEntry>;
-  private readonly egress: string[];
   /** Host directory holding the proxy's allow list. */
   private readonly egressDir: string;
+  /** What the allow list holds now, so an unchanged one is not rewritten. */
+  private egressWritten?: string;
   private readonly running = new Map<string, RunningAttempt>();
   private ready?: Promise<void>;
 
   constructor(config: AppConfig) {
     super();
     this.podman = config.podman;
-    this.models = new Map(config.models.map((m) => [m.id, m]));
-    this.egress = [...new Set(config.models.map(modelEndpoint))];
     this.egressDir = paths.egress(config.dataDir);
   }
 
@@ -144,8 +128,9 @@ export class PodmanRunner extends Runner implements OnModuleInit {
     this.running.set(request.scanId, attempt); // before any await: see Runner.stop
     try {
       await this.prepared();
-      const model = this.models.get(request.model);
-      if (!model) throw new Error(`Model ${request.model} is not in the Model Pool`);
+      // The proxy reads it for every connection: an Attempt sees the Model Pool as it is now.
+      await this.writeEgress(request.egress);
+      const model = request.agentModel;
       await this.withSecrets(model, (envFile) =>
         this.exec(['create', '--env-file', envFile, ...this.containerArgs(request, attempt.container, model)]),
       );
@@ -177,7 +162,7 @@ export class PodmanRunner extends Runner implements OnModuleInit {
     await this.remove(attempt.container);
   }
 
-  private containerArgs(request: AttemptRequest, name: string, model: ModelEntry): string[] {
+  private containerArgs(request: AttemptRequest, name: string, model: AgentModel): string[] {
     const proxy = `http://${PROXY_CONTAINER}:${PROXY_PORT}`;
     const env: Record<string, string> = {
       HOME: IN_CONTAINER.home,
@@ -220,13 +205,17 @@ export class PodmanRunner extends Runner implements OnModuleInit {
   }
 
   /**
-   * Hands the agent's secrets (SCANNER_AGENT_ENV and the model's apiKeyEnv) to `use` as an env
+   * Hands the agent's secrets (SCANNER_AGENT_ENV, and the model's key or apiKeyEnv) to `use` as an env
    * file, removed once `use` settles: they stay off the command line, and a remote podman
    * client (Windows, macOS) would not forward `--env NAME` values from this process.
    */
-  private async withSecrets<T>(model: ModelEntry, use: (envFile: string) => Promise<T>): Promise<T> {
+  private async withSecrets<T>(model: AgentModel, use: (envFile: string) => Promise<T>): Promise<T> {
     const names = new Set([...this.podman.agentEnv, ...(model.apiKeyEnv ? [model.apiKeyEnv] : [])]);
     const lines: string[] = [];
+    if (model.apiKey) {
+      if (/[\r\n]/.test(model.apiKey)) throw new Error('The model API key spans several lines, which an env file cannot hold');
+      lines.push(`${STORED_KEY_ENV}=${model.apiKey}`);
+    }
     for (const name of names) {
       const value = process.env[name];
       if (value === undefined) this.log.warn(`${name} is not set: the agent will run without it`);
@@ -244,14 +233,14 @@ export class PodmanRunner extends Runner implements OnModuleInit {
   }
 
   /** The command the agent container runs. */
-  protected agentCommand(request: AttemptRequest, model: ModelEntry): string[] {
+  protected agentCommand(request: AttemptRequest, model: AgentModel): string[] {
     // --title skips a title-generation call; stdin is not attached, so nothing joins the prompt.
     return ['opencode', 'run', '--format', 'json', '--title', request.scanId, '--dir', IN_CONTAINER.workspace, '--model', modelRef(model), request.prompt];
   }
 
   /**
    * Once per process: removes agent containers a previous process left behind, and (re)creates
-   * the networks and the egress proxy with the current allow list.
+   * the networks and the egress proxy. Its allow list is a file each Attempt rewrites.
    */
   private async prepare(): Promise<void> {
     const leftovers = await this.exec(['ps', '-aq', '--filter', `label=${SCAN_LABEL}`]);
@@ -263,7 +252,7 @@ export class PodmanRunner extends Runner implements OnModuleInit {
     if (!(await this.succeeds(['network', 'exists', EGRESS_NETWORK]))) {
       await this.exec(['network', 'create', EGRESS_NETWORK]);
     }
-    await this.writeEgress(this.egress);
+    await mkdir(this.egressDir, { recursive: true });
     await this.remove(PROXY_CONTAINER);
     await this.exec([
       'run', '--detach', '--restart', 'always', '--name', PROXY_CONTAINER,
@@ -276,15 +265,19 @@ export class PodmanRunner extends Runner implements OnModuleInit {
       '--env', `PORT=${PROXY_PORT}`,
       this.podman.proxyImage, 'node', '/proxy.js',
     ]);
-    this.log.log(`Egress proxy allows: ${this.egress.join(', ')}`);
   }
 
   /** Replaces the proxy's allow list whole, so it never reads a half-written one. */
   private async writeEgress(endpoints: string[]): Promise<void> {
-    await mkdir(this.egressDir, { recursive: true });
     const file = join(this.egressDir, 'allow.txt');
-    await writeFile(`${file}.tmp`, endpoints.map((e) => `${e}\n`).join(''));
-    await rename(`${file}.tmp`, file);
+    const content = endpoints.map((e) => `${e}\n`).join('');
+    if (content === this.egressWritten) return;
+    // A name of its own: Attempts running at once may both be writing.
+    const temp = `${file}.${randomUUID()}.tmp`;
+    await writeFile(temp, content);
+    await rename(temp, file);
+    this.egressWritten = content;
+    this.log.log(`Egress proxy allows: ${endpoints.join(', ') || 'nothing'}`);
   }
 
   private async remove(container: string): Promise<void> {

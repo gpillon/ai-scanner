@@ -14,7 +14,7 @@ export class ModelsController {
   // operationId as before the split of DiscoveryController, for clients generated from the OpenAPI.
   @ApiOperation({ summary: 'List the Model Pool, with the Default Model marked', operationId: 'DiscoveryController_listModels' })
   @ApiOkResponse({ type: [ModelDto] })
-  list(): ModelDto[] {
+  list(): Promise<ModelDto[]> {
     return this.models.list();
   }
 }

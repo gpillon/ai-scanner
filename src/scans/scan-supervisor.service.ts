@@ -13,7 +13,8 @@ import { paths } from '../common/paths';
 import { ProfileRegistry, ScanProfile } from '../profiles/profile-registry.service';
 import { renderReportPdf } from '../reports/report-renderer';
 import { buildReportView, fillMarkdownTemplate, fillPdfTemplate } from '../reports/report-template';
-import { AttemptRequest, Runner } from '../runner/runner';
+import { ModelPool } from '../models/model-pool.service';
+import { AgentModel, AttemptRequest, Runner } from '../runner/runner';
 import { Scan } from './entities/scan.entity';
 import { extractSourceArchive, InvalidSourceArchiveError } from './source-archive';
 
@@ -114,6 +115,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(Scan) private readonly scans: Repository<Scan>,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
     private readonly runner: Runner,
+    private readonly pool: ModelPool,
     private readonly store: ArtifactStore,
     private readonly profiles: ProfileRegistry,
     private readonly clock: Clock,
@@ -252,6 +254,15 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
         const transcriptPath = paths.transcript(this.config.dataDir, id, attempt);
         await mkdir(dirname(transcriptPath), { recursive: true });
         await this.scans.update(id, { attempts: attempt });
+        // Resolved for every Attempt, so a key the admin changed is used from the next one on.
+        let agentModel: AgentModel;
+        let egress: string[];
+        try {
+          [agentModel, egress] = await Promise.all([this.pool.agentModel(scan.model), this.pool.endpoints()]);
+        } catch (e) {
+          if (this.lettingGo(id)) return;
+          return await this.fail(id, `Model ${scan.model} cannot be used: ${(e as Error).message}`);
+        }
         if (this.lettingGo(id)) return;
         if (scanTimedOut) return await this.fail(id, scanTimeoutReason);
 
@@ -266,6 +277,8 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
             profile: scan.profile,
             skillsDir: profile.skillsDir,
             model: scan.model,
+            agentModel,
+            egress,
           },
           scanTimer,
         );
