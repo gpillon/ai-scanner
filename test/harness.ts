@@ -14,6 +14,7 @@ import { AttemptRequest, AttemptResult, Runner } from '../src/runner/runner';
 import { RetentionSweeper } from '../src/scans/retention-sweeper.service';
 
 export const TOKEN = 'test-token';
+export const ADMIN_TOKEN = 'test-admin-token';
 
 /** Time moves only on `advance`, which fires the timers that come due, earliest first. */
 export class FakeClock extends Clock {
@@ -217,6 +218,8 @@ export interface Harness {
   sweeper: RetentionSweeper;
   /** supertest agent already sending the bearer token. */
   api: ReturnType<typeof authed>;
+  /** The same, with the admin token. */
+  admin: ReturnType<typeof authed>;
   /** supertest against the app, no token. */
   anonymous: () => ReturnType<typeof request>;
   submit(id: string, fields?: Record<string, string>, archive?: Buffer | null, filename?: string): request.Test;
@@ -229,12 +232,13 @@ export interface Harness {
   dispose(): Promise<void>;
 }
 
-function authed(app: INestApplication) {
+function authed(app: INestApplication, token = TOKEN) {
   const http = () => request(app.getHttpServer());
-  const bearer = { Authorization: `Bearer ${TOKEN}` };
+  const bearer = { Authorization: `Bearer ${token}` };
   return {
     get: (url: string) => http().get(url).set(bearer),
     post: (url: string) => http().post(url).set(bearer),
+    patch: (url: string) => http().patch(url).set(bearer),
     delete: (url: string) => http().delete(url).set(bearer),
   };
 }
@@ -242,6 +246,7 @@ function authed(app: INestApplication) {
 export function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     token: TOKEN,
+    adminToken: ADMIN_TOKEN,
     dataDir,
     profilesDir: resolve(__dirname, '..', 'profiles'),
     models: [
@@ -291,6 +296,7 @@ export async function startApp(options: {
     config,
     sweeper: app.get(RetentionSweeper),
     api,
+    admin: authed(app, ADMIN_TOKEN),
     anonymous: () => request(app.getHttpServer()),
     submit(id, fields = { profile: 'security' }, archive = makeZip(), filename = 'source.zip') {
       const req = api.post(`/api/scan/${id}`);

@@ -33,6 +33,8 @@ export interface PodmanConfig {
 
 export interface AppConfig {
   token: string;
+  /** Opens the admin routes as well (ADR-0006); without it, administration is disabled. */
+  adminToken?: string;
   /** `podman` runs the agent in a container per Attempt; `fake` writes a placeholder Report. */
   runner: RunnerKind;
   podman: PodmanConfig;
@@ -88,6 +90,8 @@ function list(value: string | undefined): string[] {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const token = env.SCANNER_TOKEN;
   if (!token) throw new Error('SCANNER_TOKEN is required');
+  const adminToken = env.SCANNER_ADMIN_TOKEN || undefined;
+  if (adminToken === token) throw new Error('SCANNER_ADMIN_TOKEN must differ from SCANNER_TOKEN');
 
   const models: ModelEntry[] = env.SCANNER_MODELS ? JSON.parse(env.SCANNER_MODELS) : [];
   const defaultModel = env.SCANNER_DEFAULT_MODEL ?? models[0]?.id;
@@ -102,6 +106,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   return {
     token,
+    adminToken,
     runner,
     podman: {
       executable: env.SCANNER_PODMAN || 'podman',

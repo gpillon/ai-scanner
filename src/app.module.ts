@@ -1,8 +1,7 @@
 import { DynamicModule, Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Clock } from './common/clock';
-import { BearerGuard } from './common/guards/bearer.guard';
+import { AuthModule } from './auth/auth.module';
 import { paths } from './common/paths';
 import { AppConfig } from './config/app-config';
 import { CoreModule } from './core/core.module';
@@ -24,6 +23,7 @@ export class AppModule {
       module: AppModule,
       imports: [
         CoreModule.register(config, overrides.clock),
+        AuthModule,
         TypeOrmModule.forRoot({
           type: 'better-sqlite3',
           database: paths.database(config.dataDir),
@@ -34,8 +34,6 @@ export class AppModule {
         ProfilesModule,
         ModelsModule,
       ],
-      // Every route requires the shared token (ADR-0002); the UI and API docs are not routes.
-      providers: [{ provide: APP_GUARD, useClass: BearerGuard }],
     };
   }
 }
