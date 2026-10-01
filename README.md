@@ -48,6 +48,7 @@ curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/models
 
 curl -H "Authorization: Bearer $TOKEN" -F file=@code.zip -F profile=security \
      -F language=en -F instructions="Focus on the payment module" \
+     -F skillPacks=java,frontend \
      localhost:3000/api/scan/$ID
 
 curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/scans              # every Scan, newest first
@@ -69,7 +70,7 @@ The UI lives in [`ui/`](ui): Vite, React, TypeScript and [PatternFly](https://ww
 - **New Scan**: upload a zip and pick a profile, model, language and instructions. The Scan id is a random UUID.
 - **Scan**: details, failure reason, Artifact downloads, a Findings table, and delete. An **Activity** log shows what the agent does as it does it, and still shows it after the Scan has finished.
 - **Documentation**: the backend's Swagger UI, already signed in with your token.
-- **Administration** (admin token only): **Providers** and **Models**, see below.
+- **Administration** (admin token only): **Models**, **Providers**, **Skill Packs** and **Skills**, see below.
 
 In production the backend serves the built UI as static files under `/ui/`, and `/` redirects there. The UI is public: it holds no data, and it asks for the token to call the API. If `ui/dist` is missing, for instance when only the backend was built, the backend serves the API alone. `SCANNER_UI_DIR` points it at another build.
 
@@ -83,6 +84,21 @@ Scans run on the models of the Model Pool, served by Providers ([ADR-0006](docs/
 Agents may reach every Provider that serves a model, and nothing else. The egress proxy picks changes up without a restart. A disabled model still serves the Scans already using it. `SCANNER_MODELS` only fills an empty database on its first start: after that, edits to it are ignored.
 
 The same operations are under `/api/admin` in the API reference.
+
+## Skill Packs
+
+A Scan Profile brings its own agent skills. Skill Packs add more for a given kind of codebase, e.g. `java`, `go` or `frontend` ([ADR-0008](docs/adr/0008-skill-packs-chosen-per-scan.md)). Callers list them with `GET /api/skill-packs` and add them to a Scan with `skillPacks` (comma-separated, or the field repeated). The New Scan form offers them as tags.
+
+Admins manage them under Administration:
+
+- **Skills**: import skills into the library, in one of two ways:
+  - from a repository: the server runs the [`skills`](https://www.npmjs.com/package/skills) CLI (`skills add <source>`, pinned at 1.7.0) with a GitHub `owner/repo`, a Git URL or a tree URL, optionally limited to some skills;
+  - from a zip of skill directories, each holding a `SKILL.md`.
+
+  Skills are installed when imported, not when a Scan runs: the agent container has no network to fetch them. Each skill is checked: its frontmatter `name` must match its directory, it needs a `description`, and it must not shadow a Scan Profile's skill. Re-importing one needs "Replace".
+- **Skill Packs**: name a group of library skills. A skill in a pack cannot be removed from the library.
+
+Each Scan copies its profile's skills and its packs' skills at submission and keeps that copy, so later edits never change a queued or retried Scan. Its status lists every pack with the sha256 of each skill.
 
 ## Configuration
 
@@ -154,6 +170,7 @@ src/          NestJS backend, one folder per feature module
   main.ts, app.module.ts, app.setup.ts   bootstrap, root module, pipes/OpenAPI/UI
   core/       global module: configuration and Clock
   auth/       bearer guard, admin token, GET /api/me
+  skills/     Skill Library, Skill Packs, skills CLI import
   config/     environment variables to AppConfig
   common/     Clock, on-disk paths, app root
   scans/      Scans: controller, service, supervisor, retention, upload, DTOs, entity
@@ -168,3 +185,7 @@ containers/   Agent image and egress proxy
 test/         e2e suite and fixtures
 docs/adr/     Architecture decision records
 ```
+
+## License
+
+Apache License 2.0, see [LICENSE](LICENSE). Vendored skills keep their own licenses, see their NOTICE files.

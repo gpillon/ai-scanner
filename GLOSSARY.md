@@ -16,6 +16,10 @@ _Avoid_: Upload, payload, package, zip
 A named kind of analysis a caller can request, bundling the agent skills and instructions that produce its Report.
 _Avoid_: Skill, scan type, analysis type
 
+**Skill Pack**:
+A named group of agent skills that an admin imports, and a caller can add to a Scan on top of its Scan Profile's own skills (ADR-0008).
+_Avoid_: Skill group, plugin, extension, bundle
+
 **Attempt**:
 One execution of the agent within a Scan; a Scan retries with a new Attempt when an Attempt ends without valid Artifacts.
 _Avoid_: Retry, iteration, run

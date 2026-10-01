@@ -2,6 +2,7 @@
   "name": "ai-scanner-ui",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "description": "Web UI of ai-scanner, served by the backend under /ui/",
   "scripts": {
