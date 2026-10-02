@@ -217,8 +217,13 @@ class Writer {
     const start = typeof list.start === 'number' ? list.start : 1;
     list.items.forEach((item, i) => {
       const marker = list.ordered ? `${start + i}.` : '•';
+      doc.font(FONT.regular).fontSize(BODY_SIZE).fillColor(this.color);
+      // The marker and its item's first line start on the same page: left to pdfkit, a marker at
+      // the foot of a page moved alone to the next one, and its text, set back to the old y, to
+      // the page after.
+      if (doc.y + doc.currentLineHeight(true) > doc.page.height - doc.page.margins.bottom) doc.addPage();
       const y = doc.y;
-      doc.font(FONT.regular).fontSize(BODY_SIZE).fillColor(this.color).text(marker, this.left + indent, y, {
+      doc.text(marker, this.left + indent, y, {
         width: INDENT,
         lineBreak: false,
       });
