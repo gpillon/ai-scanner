@@ -1,4 +1,4 @@
-import { loadConfig } from '../src/config/app-config';
+import { loadConfig, MINUTE_MS } from '../src/config/app-config';
 import { Harness, startApp } from './harness';
 
 const BASE_ENV = { SCANNER_TOKEN: 't', SCANNER_MODELS: JSON.stringify([{ id: 'm', provider: 'anthropic' }]) };
@@ -7,6 +7,12 @@ describe('Runner selection', () => {
   it('uses the Podman Runner unless configured otherwise', () => {
     expect(loadConfig(BASE_ENV).runner).toBe('podman');
     expect(loadConfig({ ...BASE_ENV, SCANNER_RUNNER: 'fake' }).runner).toBe('fake');
+  });
+
+  it('skips the model warm-up by default with the fake Runner only', () => {
+    expect(loadConfig({ ...BASE_ENV, SCANNER_RUNNER: 'fake' }).warmupTimeoutMs).toBe(0);
+    expect(loadConfig({ ...BASE_ENV, SCANNER_RUNNER: 'fake', SCANNER_WARMUP_TIMEOUT_MINUTES: '5' }).warmupTimeoutMs).toBe(5 * MINUTE_MS);
+    expect(loadConfig(BASE_ENV).warmupTimeoutMs).toBe(30 * MINUTE_MS);
   });
 
   it('refuses an unknown Runner', () => {

@@ -201,7 +201,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     attemptTimeoutMs: positive(env.SCANNER_ATTEMPT_TIMEOUT_MINUTES, 180) * MINUTE_MS,
     scanTimeoutMs: positive(env.SCANNER_SCAN_TIMEOUT_MINUTES, 540) * MINUTE_MS,
     concurrency: positiveInt(env.SCANNER_CONCURRENCY, 2),
-    warmupTimeoutMs: num(env.SCANNER_WARMUP_TIMEOUT_MINUTES, 30) * MINUTE_MS,
+    // The fake Runner runs no agent, so by default no model is asked anything either.
+    warmupTimeoutMs: num(env.SCANNER_WARMUP_TIMEOUT_MINUTES, runner === 'fake' ? 0 : 30) * MINUTE_MS,
     git: {
       timeoutMs: positive(env.SCANNER_GIT_TIMEOUT_SECONDS, 120) * 1000,
       hosts: list(env.SCANNER_GIT_HOSTS),

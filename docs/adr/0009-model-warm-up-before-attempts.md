@@ -16,7 +16,7 @@ Models served with scale-to-zero (Knative, KServe, an autoscaler) hold the first
 
 - Every Scan costs one extra one-token completion.
 - Concurrent Scans of the same model each send their own warm-up. They all wait for the same scale-up, which is harmless and keeps each Scan's warm-up its own.
-- `SCANNER_WARMUP_TIMEOUT_MINUTES=0` skips the warm-up: Scans go from `queued` straight to `running`, as before.
+- `SCANNER_WARMUP_TIMEOUT_MINUTES=0` skips the warm-up: Scans go from `queued` straight to `running`, as before. It is the default with the fake Runner, which runs no agent and so needs no model.
 
 ## Considered Options
 
