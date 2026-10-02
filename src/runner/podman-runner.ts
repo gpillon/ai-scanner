@@ -8,8 +8,8 @@ import { join, resolve } from 'node:path';
 import { APP_ROOT } from '../common/app-root';
 import { AppConfig, ModelEntry, PodmanConfig } from '../config/app-config';
 import { endpointOf, isBuiltInKind, KIND_INFO } from '../models/provider-kinds';
-import { agentCommand, agentEnv, agentSecrets, IN_CONTAINER } from './agent-spec';
-import { AgentModel, AttemptRequest, AttemptResult, Runner } from './runner';
+import { agentCommand, agentEnv, agentSecrets, IN_CONTAINER, PREPARATION_COMMAND, preparationEnv, variantImageOrThrow } from './agent-spec';
+import { AgentImageUnavailableError, AgentModel, AttemptRequest, AttemptResult, PreparationRequest, Runner } from './runner';
 
 /** Every Attempt's proxy joins this network too, to reach its model; agents never do. */
 export const EGRESS_NETWORK = 'ai-scanner-egress';
@@ -39,6 +39,7 @@ export function instanceOf(dataDir: string): string {
 }
 
 interface RunningAttempt {
+  scanId: string;
   container: string;
   /** The Attempt's own egress proxy, and the internal network it shares with the agent alone. */
   proxy: string;
@@ -51,7 +52,9 @@ interface RunningAttempt {
  * The workspace is mounted read-only and /output writable; the root filesystem is read-only;
  * the container has no capabilities. Its only network is one of its own, with no route out,
  * shared with a proxy of its own that lets through its model's endpoint and nothing else.
- * All three go when the Attempt ends.
+ * All three go when the Attempt ends. A Scan's Preparation runs the same way, with its script
+ * for command, /prepared writable, and a proxy letting through its profile's endpoints only
+ * (ADR-0015).
  */
 export class PodmanRunner extends Runner implements OnModuleInit {
   private readonly log = new Logger(PodmanRunner.name);
@@ -67,23 +70,53 @@ export class PodmanRunner extends Runner implements OnModuleInit {
   }
 
   async run(request: AttemptRequest): Promise<AttemptResult> {
-    const name = `ais-${this.instance}-${request.scanId}-${request.attempt}`;
-    const attempt: RunningAttempt = { container: name, proxy: `${name}-proxy`, network: `${name}-net`, stopped: false };
-    this.running.set(request.scanId, attempt); // before any await: see Runner.stop
+    const model = request.agentModel;
+    const image = variantImageOrThrow(this.podman.agentImage, request.imageVariant);
+    return this.launch(
+      { scanId: request.scanId, name: `ais-${this.instance}-${request.scanId}-${request.attempt}`, allow: request.modelEgress, image },
+      request.transcriptPath,
+      () => agentSecrets(model, this.podman.agentEnv, (m) => this.log.warn(m)),
+      (attempt) => this.containerArgs(request, attempt, model, image),
+    );
+  }
+
+  async runPreparation(request: PreparationRequest): Promise<AttemptResult> {
+    const image = variantImageOrThrow(this.podman.agentImage, request.imageVariant);
+    return this.launch(
+      { scanId: request.scanId, name: `ais-${this.instance}-${request.scanId}-prep`, allow: request.egress, image },
+      request.logPath,
+      () => ({}),
+      (attempt) => this.preparationArgs(request, attempt, image),
+    );
+  }
+
+  /**
+   * Runs one container of `image` on a network of its own, behind a proxy of its own that lets
+   * through `allow` only, and removes all three once it exits; its output goes to `logPath`. Its
+   * `secrets` reach it through an env file.
+   */
+  private async launch(
+    job: { scanId: string; name: string; allow: string[]; image: string },
+    logPath: string,
+    secrets: () => Record<string, string>,
+    args: (attempt: RunningAttempt) => string[],
+  ): Promise<AttemptResult> {
+    const { scanId, name } = job;
+    const attempt: RunningAttempt = { scanId, container: name, proxy: `${name}-proxy`, network: `${name}-net`, stopped: false };
+    this.running.set(scanId, attempt); // before any await: see Runner.stop
     try {
       await this.prepared();
-      await this.exec(['network', 'create', '--internal', ...this.labels(request.scanId), attempt.network]);
+      await this.ensureImage(job.image);
       if (attempt.stopped) return { exitCode: 137 };
-      await this.startProxy(attempt, request);
+      await this.exec(['network', 'create', '--internal', ...this.labels(scanId), attempt.network]);
       if (attempt.stopped) return { exitCode: 137 };
-      const model = request.agentModel;
-      await this.withSecrets(model, (envFile) =>
-        this.exec(['create', '--env-file', envFile, ...this.containerArgs(request, attempt, model)]),
-      );
+      await this.startProxy(attempt, job.allow);
       if (attempt.stopped) return { exitCode: 137 };
-      return { exitCode: await this.startAttached(attempt.container, request.transcriptPath) };
+      await this.withEnvFile(secrets(), (envFile) => this.exec(['create', '--env-file', envFile, ...args(attempt)]));
+      if (attempt.stopped) return { exitCode: 137 };
+      return { exitCode: await this.startAttached(attempt.container, logPath) };
     } finally {
-      if (this.running.get(request.scanId) === attempt) this.running.delete(request.scanId);
+      if (this.running.get(scanId) === attempt) this.running.delete(scanId);
       await this.remove(attempt.container);
       await this.remove(attempt.proxy);
       await this.removeNetwork(attempt.network);
@@ -116,18 +149,18 @@ export class PodmanRunner extends Runner implements OnModuleInit {
   }
 
   /**
-   * The Attempt's egress proxy, on its network and the egress network, allowing only its model's
-   * endpoint, fixed for its whole life. Resolves once it listens, so the agent's first request
-   * never races it.
+   * The Attempt's egress proxy, on its network and the egress network, allowing only `allow`
+   * (its model's endpoint, and its profile's), fixed for its whole life. Resolves once it
+   * listens, so the agent's first request never races it.
    */
-  private async startProxy(attempt: RunningAttempt, request: AttemptRequest): Promise<void> {
+  private async startProxy(attempt: RunningAttempt, allow: string[]): Promise<void> {
     await this.exec([
-      'run', '--detach', '--name', attempt.proxy, ...this.labels(request.scanId),
+      'run', '--detach', '--name', attempt.proxy, ...this.labels(attempt.scanId),
       '--network', `${attempt.network},${EGRESS_NETWORK}`,
       '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
       '--pids-limit', '64', '--memory', '128m',
       '--volume', `${PROXY_SCRIPT}:/proxy.js:ro`,
-      '--env', `ALLOW=${request.modelEgress.join(',')}`,
+      '--env', `ALLOW=${allow.join(',')}`,
       '--env', `PORT=${PROXY_PORT}`,
       this.podman.proxyImage, 'node', '/proxy.js',
     ]);
@@ -142,11 +175,11 @@ export class PodmanRunner extends Runner implements OnModuleInit {
     }
   }
 
-  private containerArgs(request: AttemptRequest, attempt: RunningAttempt, model: AgentModel): string[] {
-    const env = agentEnv(request, model, `http://${attempt.proxy}:${PROXY_PORT}`);
-    const args = [
+  /** What the agent's and the Preparation's containers share: the isolation, and the workspace read-only. */
+  private isolationArgs(attempt: RunningAttempt, workspaceDir: string): string[] {
+    return [
       '--name', attempt.container,
-      ...this.labels(request.scanId),
+      ...this.labels(attempt.scanId),
       '--network', attempt.network,
       '--read-only',
       '--tmpfs', '/tmp:rw,size=512m',
@@ -156,23 +189,45 @@ export class PodmanRunner extends Runner implements OnModuleInit {
       '--pids-limit', '512',
       '--memory', this.podman.memory,
       '--user', '0:0', // rootless: the invoking user on the host, so /output stays writable
-      '--volume', `${request.workspaceDir}:${IN_CONTAINER.workspace}:ro`,
+      '--volume', `${workspaceDir}:${IN_CONTAINER.workspace}:ro`,
+    ];
+  }
+
+  private containerArgs(request: AttemptRequest, attempt: RunningAttempt, model: AgentModel, image: string): string[] {
+    const env = agentEnv(request, model, `http://${attempt.proxy}:${PROXY_PORT}`);
+    const args = [
+      ...this.isolationArgs(attempt, request.workspaceDir),
       '--volume', `${request.outputDir}:${IN_CONTAINER.output}:rw`,
       '--workdir', IN_CONTAINER.workspace,
     ];
     if (request.skillsDir) args.push('--volume', `${request.skillsDir}:${IN_CONTAINER.skills}:ro`);
+    if (request.preparedDir) args.push('--volume', `${request.preparedDir}:${IN_CONTAINER.prepared}:ro`);
     for (const [key, value] of Object.entries(env)) args.push('--env', `${key}=${value}`);
-    args.push(this.podman.agentImage, ...this.agentCommand(request, model));
+    args.push(image, ...this.agentCommand(request, model));
+    return args;
+  }
+
+  /** The Preparation's container: the agent image running the profile's script, with /prepared writable. */
+  private preparationArgs(request: PreparationRequest, attempt: RunningAttempt, image: string): string[] {
+    const args = [
+      ...this.isolationArgs(attempt, request.workspaceDir),
+      '--volume', `${request.preparedDir}:${IN_CONTAINER.prepared}:rw`,
+      '--volume', `${request.scriptDir}:${IN_CONTAINER.prepare}:ro`,
+      '--workdir', IN_CONTAINER.prepared,
+    ];
+    const env = preparationEnv(`http://${attempt.proxy}:${PROXY_PORT}`);
+    for (const [key, value] of Object.entries(env)) args.push('--env', `${key}=${value}`);
+    args.push(image, ...PREPARATION_COMMAND);
     return args;
   }
 
   /**
-   * Hands the agent's secrets (SCANNER_AGENT_ENV, and the model's key or apiKeyEnv) to `use` as an env
-   * file, removed once `use` settles: they stay off the command line, and a remote podman
+   * Hands secrets (the agent's: SCANNER_AGENT_ENV, and the model's key or apiKeyEnv) to `use` as
+   * an env file, removed once `use` settles: they stay off the command line, and a remote podman
    * client (Windows, macOS) would not forward `--env NAME` values from this process.
    */
-  private async withSecrets<T>(model: AgentModel, use: (envFile: string) => Promise<T>): Promise<T> {
-    const lines = Object.entries(agentSecrets(model, this.podman.agentEnv, (m) => this.log.warn(m))).map(([k, v]) => `${k}=${v}`);
+  private async withEnvFile<T>(secrets: Record<string, string>, use: (envFile: string) => Promise<T>): Promise<T> {
+    const lines = Object.entries(secrets).map(([k, v]) => `${k}=${v}`);
     const dir = await mkdtemp(join(tmpdir(), 'ai-scanner-env-'));
     try {
       const file = join(dir, 'agent.env');
@@ -202,6 +257,14 @@ export class PodmanRunner extends Runner implements OnModuleInit {
     if (!(await this.succeeds(['network', 'exists', EGRESS_NETWORK]))) {
       await this.exec(['network', 'create', EGRESS_NETWORK]);
     }
+  }
+
+  /** Pulls the image unless the host has it: one that cannot be had fails the Scan, not just this Attempt. */
+  private async ensureImage(image: string): Promise<void> {
+    if (await this.succeeds(['image', 'exists', image])) return;
+    await this.exec(['pull', image]).catch((e) => {
+      throw new AgentImageUnavailableError(image, (e as Error).message);
+    });
   }
 
   private async remove(container: string): Promise<void> {

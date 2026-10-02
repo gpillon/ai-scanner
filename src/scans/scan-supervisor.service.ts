@@ -15,7 +15,7 @@ import { renderReportPdf } from '../reports/report-renderer';
 import { buildReportView, fillMarkdownTemplate, fillPdfTemplate } from '../reports/report-template';
 import { ModelPool } from '../models/model-pool.service';
 import { ModelUnusableError, ModelWarmup } from '../models/model-warmup.service';
-import { AgentModel, AttemptRequest, Runner } from '../runner/runner';
+import { AgentImageUnavailableError, AgentModel, AttemptRequest, Runner } from '../runner/runner';
 import { addUsage, attemptUsage, NO_USAGE } from '../runner/usage';
 import { Scan } from './entities/scan.entity';
 import { extractSourceArchive, InvalidSourceArchiveError } from './source-archive';
@@ -75,6 +75,13 @@ function minutes(ms: number): string {
   return `${ms / MINUTE_MS} min`;
 }
 
+/** The last line a Preparation printed, as `: <line>`, so a failed one says why; empty when none. */
+async function lastLine(logPath: string): Promise<string> {
+  const text = await readFile(logPath, 'utf8').catch(() => '');
+  const line = text.split('\n').map((l) => l.trim()).filter(Boolean).pop();
+  return line ? `: ${line.length > 300 ? `${line.slice(0, 299)}…` : line}` : '';
+}
+
 /** A set of Scan ids where each `add` is undone by its own release, so overlapping claims compose. */
 class IdClaims {
   private readonly counts = new Map<string, number>();
@@ -100,8 +107,11 @@ class IdClaims {
   }
 }
 
-/** How an Attempt ended, before its output is checked. */
-type AttemptEnd = 'scan-timeout' | { problem?: string };
+/**
+ * How an Attempt ended, before its output is checked. `fatal`: no other Attempt could do better
+ * (its agent image cannot be had), so the Scan fails at once.
+ */
+type AttemptEnd = 'scan-timeout' | { problem?: string; fatal?: string };
 
 /**
  * Deterministic Scan lifecycle (ADR-0001). The queue lives in the database: `queued` Scans
@@ -197,24 +207,26 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
 
   private async fill(): Promise<void> {
     while (!this.shuttingDown && this.active.size < this.config.concurrency) {
-      const id = await this.nextQueued();
-      if (!id) return;
+      const next = await this.nextQueued();
+      if (!next) return;
+      // A Preparation runs before the warm-up (ADR-0015): the Scan is `running` meanwhile.
+      const warmsFirst = this.warmup.enabled && !this.profiles.get(next.profile)?.preparation;
       // Conditional on `queued`, so a Scan deleted meanwhile is never started.
       const claimed = await this.scans.update(
-        { id, state: 'queued' },
-        { state: this.warmup.enabled ? 'warming' : 'running', startedAt: this.clock.now().toISOString(), attempts: 0 },
+        { id: next.id, state: 'queued' },
+        { state: warmsFirst ? 'warming' : 'running', startedAt: this.clock.now().toISOString(), attempts: 0 },
       );
-      if (claimed.affected) this.start(id);
+      if (claimed.affected) this.start(next.id);
     }
   }
 
   /** The oldest `queued` Scan not held. Ordered by rowid: `createdAt` can tie. */
-  private async nextQueued(): Promise<string | undefined> {
-    const rows: { id: string }[] = await this.scans.query(
-      `SELECT id FROM scans WHERE state = 'queued' ORDER BY rowid LIMIT ?`,
+  private async nextQueued(): Promise<{ id: string; profile: string } | undefined> {
+    const rows: { id: string; profile: string }[] = await this.scans.query(
+      `SELECT id, profile FROM scans WHERE state = 'queued' ORDER BY rowid LIMIT ?`,
       [this.held.size + 1],
     );
-    return rows.map((r) => r.id).find((id) => !this.held.has(id));
+    return rows.find((r) => !this.held.has(r.id));
   }
 
   private start(id: string): void {
@@ -243,10 +255,13 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
 
     const workspaceDir = paths.workspace(this.config.dataDir, id);
     const outputDir = paths.output(this.config.dataDir, id);
-    // Emptied first: a restart may have left a partial extraction behind.
+    const preparedDir = paths.prepared(this.config.dataDir, id);
+    // Emptied first: a restart may have left a partial extraction or Preparation behind.
     await rm(workspaceDir, { recursive: true, force: true });
+    await rm(preparedDir, { recursive: true, force: true });
     await mkdir(workspaceDir, { recursive: true });
     await mkdir(outputDir, { recursive: true });
+    if (profile.preparation) await mkdir(preparedDir, { recursive: true });
     try {
       if (scan.source) {
         // Checked out and checked when the Scan was submitted (ADR-0010): copied, kept for a restart.
@@ -263,6 +278,13 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
       return this.fail(id, `Invalid Source Archive: ${e.message}`);
     }
     if (this.lettingGo(id)) return;
+
+    // Before the warm-up, so a long Preparation does not leave the model idle until it scales down.
+    if (profile.preparation) {
+      if (!(await this.prepare(id, profile, workspaceDir, preparedDir))) return;
+      if (this.warmup.enabled) await this.scans.update({ id, state: 'running' }, { state: 'warming' });
+      if (this.lettingGo(id)) return;
+    }
 
     // The model answers first: no Attempt, pod or container starts before it does (ADR-0009).
     if (this.warmup.enabled) {
@@ -293,6 +315,8 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
             this.pool.endpoints(),
             this.pool.modelEndpoints(scan.model),
           ]);
+          // The profile's endpoints too (ADR-0015).
+          modelEgress = [...new Set([...modelEgress, ...profile.egress])];
         } catch (e) {
           if (this.lettingGo(id)) return;
           return await this.fail(id, `Model ${scan.model} cannot be used: ${(e as Error).message}`);
@@ -316,12 +340,15 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
             modelEgress,
             attemptTimeoutMs: scan.attemptTimeoutMinutes ? scan.attemptTimeoutMinutes * MINUTE_MS : this.config.attemptTimeoutMs,
             leadReadsCode: profile.leadReadsCode,
+            ...(profile.preparation && { preparedDir }),
+            imageVariant: profile.imageVariant,
           },
           scanTimer,
         );
         await this.recordUsage(id, transcriptPath);
         if (this.lettingGo(id)) return;
         if (end === 'scan-timeout') return await this.fail(id, scanTimeoutReason);
+        if (end.fatal) return await this.fail(id, end.fatal);
 
         const check = end.problem
           ? { valid: false as const, reason: end.problem }
@@ -347,8 +374,7 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
     const id = scan.id;
     const controller = new AbortController();
     this.warmups.set(id, controller);
-    const logPath = paths.warmupLog(this.config.dataDir, id);
-    const log = (text: string) => appendFileSync(logPath, JSON.stringify({ at: this.clock.now().toISOString(), text }) + '\n');
+    const log = this.stepLog(id);
     try {
       await this.warmup.warm(await this.pool.agentModel(scan.model), controller.signal, log);
       return !this.lettingGo(id);
@@ -360,6 +386,58 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
       return false;
     } finally {
       this.warmups.delete(id);
+    }
+  }
+
+  /** Writes a step to the Scan's log before Attempt 1, which its activity stream shows. */
+  private stepLog(id: string): (text: string) => void {
+    const logPath = paths.warmupLog(this.config.dataDir, id);
+    return (text) => appendFileSync(logPath, JSON.stringify({ at: this.clock.now().toISOString(), text }) + '\n');
+  }
+
+  /**
+   * Runs the profile's Preparation, which fills `preparedDir` (ADR-0015). True when it exited 0;
+   * otherwise the Scan has failed, or the supervisor is letting go of it. Called right after a
+   * `lettingGo` check: see Runner.stop.
+   */
+  private async prepare(id: string, profile: ScanProfile, workspaceDir: string, preparedDir: string): Promise<boolean> {
+    const { dir, timeoutMs } = profile.preparation!;
+    const logPath = paths.preparationLog(this.config.dataDir, id);
+    const step = this.stepLog(id);
+    step('Preparing the code for the agent');
+    const request = {
+      scanId: id,
+      workspaceDir,
+      preparedDir,
+      scriptDir: dir,
+      logPath,
+      egress: profile.egress,
+      timeoutMs,
+      imageVariant: profile.imageVariant,
+    };
+    const timer = this.clock.timer(timeoutMs);
+    try {
+      // Why it failed; undefined when it exited 0. Only the script's own exit quotes its output.
+      const run = (async () => this.runner.runPreparation(request))().then(
+        async (result) => (result.exitCode === 0 ? undefined : `it exited with code ${result.exitCode}${await lastLine(logPath)}`),
+        (e) => (e instanceof AgentImageUnavailableError ? e.message : `it could not run: ${(e as Error)?.message ?? e}`),
+      );
+      const end = await Promise.race([run, timer.elapsed.then(() => 'timeout' as const)]);
+      if (end === 'timeout') {
+        await this.runner.stop(id);
+        await run;
+      }
+      if (this.lettingGo(id)) return false;
+      if (end === undefined) {
+        step('Preparation done');
+        return true;
+      }
+      const problem = end === 'timeout' ? `it timed out after ${minutes(timeoutMs)}` : end;
+      step(`Preparation failed: ${problem}`);
+      await this.fail(id, `Preparation failed: ${problem}`);
+      return false;
+    } finally {
+      timer.cancel();
     }
   }
 
@@ -379,7 +457,8 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
       const run = (async () => this.runner.run(request))().then(
         (result): AttemptEnd =>
           result.exitCode === 0 ? {} : { problem: `the agent exited with code ${result.exitCode}` },
-        (e): AttemptEnd => ({ problem: `the agent crashed: ${(e as Error)?.message ?? e}` }),
+        (e): AttemptEnd =>
+          e instanceof AgentImageUnavailableError ? { fatal: e.message } : { problem: `the agent crashed: ${(e as Error)?.message ?? e}` },
       );
       const end = await Promise.race([
         run,
@@ -451,12 +530,14 @@ export class ScanSupervisor implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Removes the caller's code once the Scan ends (ADR-0003): the Source Archive and the
-   * workspace. Partial Artifacts and transcripts stay, kept internally for debugging (ADR-0001).
+   * Removes the caller's code once the Scan ends (ADR-0003): the Source Archive, the workspace,
+   * and what the Preparation made of it. Partial Artifacts and transcripts stay, kept internally
+   * for debugging (ADR-0001).
    */
   private async discardSource(id: string): Promise<void> {
     await rm(paths.sourceArchive(this.config.dataDir, id), { force: true });
     await rm(paths.sourceCheckout(this.config.dataDir, id), { recursive: true, force: true });
     await rm(paths.workspace(this.config.dataDir, id), { recursive: true, force: true });
+    await rm(paths.prepared(this.config.dataDir, id), { recursive: true, force: true });
   }
 }

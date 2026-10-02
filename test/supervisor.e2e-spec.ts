@@ -353,6 +353,19 @@ describe('Scan Supervisor', () => {
       expect(other.body.equals(one.body)).toBe(false);
     });
 
+    it('keeps a list item on one page, never leaving its marker alone on a page of its own', async () => {
+      await start({ config: { profilesDir } });
+      // About 50 items fit on a page: with a marker pushed to a page of its own and its text to the
+      // next at every break, the list took three times as many pages.
+      h.runner.script = scripts.writeReport(Array.from({ length: 400 }, (_, i) => `- item ${i}`).join('\n'));
+      await h.submit('s1', MARKDOWN);
+      await h.waitForState('s1', 'succeeded');
+      const pdf = await h.download('s1', 'report.pdf');
+      const pages = pdf.body.toString('latin1').match(/\/Type \/Page\b/g)?.length ?? 0;
+      expect(pages).toBeGreaterThan(5);
+      expect(pages).toBeLessThan(11);
+    });
+
     it('renders a Report using the whole Markdown syntax', async () => {
       await start({ config: { profilesDir } });
       const rich = [
@@ -380,6 +393,30 @@ describe('Scan Supervisor', () => {
     const source = makeZip({ 'src/db.js': Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n') + '\n' });
     const data = (findings: object[], report: object = { summary: 'Two problems.' }) => JSON.stringify({ report, findings });
     const finding = (over: object) => ({ ...SAMPLE_FINDINGS.findings[0], ...over });
+
+    it("hands a profile's own template the agent's findings.json as it is, under `data`", async () => {
+      // A profile whose Report is not about Findings: its template renders fields of its own schema.
+      const dir = join(profilesDir, 'inventory');
+      await mkdir(join(dir, 'report'), { recursive: true });
+      await writeFile(join(dir, 'profile.json'), JSON.stringify({ name: 'inventory', description: 'Inventory', producesFindings: true }));
+      await writeFile(join(dir, 'prompt.md'), 'Write /output/findings.json.\n');
+      await writeFile(
+        join(dir, 'report', 'schema.json'),
+        JSON.stringify({ type: 'object', required: ['findings', 'report'], properties: { report: { type: 'object', required: ['items'] } } }),
+      );
+      await writeFile(join(dir, 'report', 'report.md.hbs'), '# Inventory\n\n{{#each data.report.items}}- {{cell this.name}}: {{this.count}}\n{{/each}}');
+      await writeFile(join(dir, 'report', 'report.typ'), '#let d = json(bytes(sys.inputs.data))\n#for i in d.data.report.items [#i.name: #i.count \\ ]\n');
+      try {
+        await start({ config: { profilesDir } });
+        h.runner.script = scripts.writeFindingsText(JSON.stringify({ findings: [], report: { items: [{ name: 'alpha', count: 2 }, { name: 'beta', count: 5 }] } }));
+        await h.submit('s1', { profile: 'inventory' }, source);
+        expect((await h.waitForState('s1', 'succeeded')).artifacts).toEqual(['findings.json', 'report.md', 'report.pdf']);
+        expect((await h.api.get('/api/scan/s1/artifacts/report.md')).text).toBe('# Inventory\n\n- alpha: 2\n- beta: 5\n');
+        expect((await h.download('s1', 'report.pdf')).body.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
 
     async function scan(json: string, id = 's1'): Promise<string> {
       h.runner.script = scripts.writeFindingsText(json);

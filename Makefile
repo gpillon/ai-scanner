@@ -4,7 +4,11 @@
 CONTAINER_ENGINE ?= podman
 IMAGE            ?= ghcr.io/gpillon/ai-scanner
 TAG              ?= dev
-AGENT_IMAGE      ?= localhost/ai-scanner-agent:latest
+AGENT_REPO       ?= localhost/ai-scanner-agent
+AGENT_TAG        ?= latest
+AGENT_IMAGE      ?= $(AGENT_REPO):$(AGENT_TAG)
+# The `full` variant a Scan Profile can ask for (ADR-0016): same repository plus `-full`, same tag.
+AGENT_FULL_IMAGE ?= $(AGENT_REPO)-full:$(AGENT_TAG)
 PORT             ?= 3000
 # Set to `fake` to try the UI without Podman: Scans then get a placeholder Report.
 RUNNER           ?=
@@ -14,7 +18,7 @@ ENV_RUN = $(if $(RUNNER),SCANNER_RUNNER=$(RUNNER) )PORT=$(PORT)
 
 .DEFAULT_GOAL := help
 .PHONY: help install dev dev-backend debug-backend dev-ui build build-backend build-ui start typecheck test test-smoke \
-        image agent-image images run-image clean release release-push chart-lint
+        image agent-image agent-full-image images run-image clean release release-push chart-lint
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -74,7 +78,10 @@ image: ## Build the service image (API + UI), IMAGE:TAG
 agent-image: ## Build the agent image the Podman Runner starts per Attempt
 	$(CONTAINER_ENGINE) build -t $(AGENT_IMAGE) containers/agent
 
-images: image agent-image ## Build both images
+agent-full-image: agent-image ## Build the agent image's `full` variant on top of it (ADR-0016)
+	$(CONTAINER_ENGINE) build --build-arg BASE_IMAGE=$(AGENT_IMAGE) -t $(AGENT_FULL_IMAGE) containers/agent-full
+
+images: image agent-full-image ## Build the service image, the agent image and its `full` variant
 
 run-image: .env ## Run the service image, data in the ai-scanner-data volume
 	$(CONTAINER_ENGINE) run --rm -it --env-file .env $(if $(RUNNER),-e SCANNER_RUNNER=$(RUNNER)) \
@@ -84,8 +91,9 @@ clean: ## Remove build output (not data/)
 	rm -rf dist ui/dist
 
 ## --- Release ---
-# A release is a vX.Y.Z tag on main. Pushing it makes CI build and push both images as X.Y.Z,
-# and publish the Helm chart X.Y.Z (appVersion X.Y.Z) to the gh-pages Helm repository.
+# A release is a vX.Y.Z tag on main. Pushing it makes CI build and push the images (service,
+# agent, agent-full) as X.Y.Z, and publish the Helm chart X.Y.Z (appVersion X.Y.Z) to the
+# gh-pages Helm repository.
 
 VERSION ?=
 SEMVER  := ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$

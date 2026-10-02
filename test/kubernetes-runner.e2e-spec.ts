@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { detectRunner, loadConfig } from '../src/config/app-config';
 import { STORED_KEY_ENV } from '../src/runner/agent-spec';
 import { KubeApi } from '../src/runner/kube-api';
-import { agentImageFor, attemptPodName, K8S, KubernetesRunner } from '../src/runner/kubernetes-runner';
-import { AttemptRequest } from '../src/runner/runner';
+import { agentImageFor, attemptPodName, K8S, KubernetesRunner, preparationPodName } from '../src/runner/kubernetes-runner';
+import { AgentImageUnavailableError, AttemptRequest, PreparationRequest } from '../src/runner/runner';
 import { testConfig } from './harness';
 
 const NS = 'scanner-ns';
@@ -311,6 +311,121 @@ describe('Kubernetes Runner', () => {
     await expect(runner.run(await request())).rejects.toThrow(/proxy.*ErrImagePull/);
     expect(agentPod()).toBeUndefined();
     for (const store of Object.values(kube.stores)) expect(store.size).toBe(0);
+  });
+
+  describe("a Scan Profile's Preparation (ADR-0015)", () => {
+    const prepTerminated = (exitCode: number) => ({
+      phase: exitCode ? 'Failed' : 'Succeeded',
+      containerStatuses: [{ name: 'preparation', state: { terminated: { exitCode } } }],
+    });
+
+    async function preparation(over: Partial<PreparationRequest> = {}): Promise<PreparationRequest> {
+      const scanDir = join(dataDir, 'scans', 'My_Scan.ID');
+      for (const d of ['workspace', 'prepared']) await mkdir(join(scanDir, d), { recursive: true });
+      // The profile's prepare/ lives in the server image, off the data volume.
+      const scriptDir = join(dataDir, '..', `prepare-${Date.now()}`);
+      await mkdir(scriptDir, { recursive: true });
+      await writeFile(join(scriptDir, 'run.sh'), 'echo hi\n');
+      return {
+        scanId: 'My_Scan.ID',
+        workspaceDir: join(scanDir, 'workspace'),
+        preparedDir: join(scanDir, 'prepared'),
+        scriptDir,
+        logPath: join(scanDir, 'preparation.log'),
+        egress: ['packages.example.org:443'],
+        timeoutMs: 30 * 60_000,
+        ...over,
+      };
+    }
+
+    it('runs its script in a confined pod of the agent image, behind a proxy allowing only its endpoints', async () => {
+      kube.script = { statuses: [prepTerminated(0)], log: 'prepared 2 archives\n' };
+      await makeRunner();
+      const req = await preparation();
+      expect(await runner.runPreparation(req)).toEqual({ exitCode: 0 });
+
+      const pod = agentPod();
+      const name = preparationPodName('My_Scan.ID');
+      expect(pod.metadata.name).toBe(name);
+      expect(pod.metadata.name).toMatch(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/);
+      // Labelled as an agent: the chart's deny-all and the Attempt's policies hold it.
+      expect(pod.metadata.labels[K8S.component]).toBe('agent');
+      expect(pod.metadata.annotations[K8S.attempt]).toBe('preparation');
+      expect(pod.spec).toMatchObject({ automountServiceAccountToken: false, enableServiceLinks: false, dnsPolicy: 'None' });
+      expect(pod.spec.activeDeadlineSeconds).toBe(30 * 60 + 300);
+      const container = pod.spec.containers[0];
+      expect(container.name).toBe('preparation');
+      expect(container.image).toBe('ghcr.io/acme/ai-scanner-agent:1.2.3');
+      expect(container.command).toEqual(['bash', '/prepare/run.sh']);
+      expect(container.workingDir).toBe('/prepared');
+      expect(container.securityContext).toEqual({ allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ['ALL'] } });
+      expect(container.volumeMounts).toEqual(
+        expect.arrayContaining([
+          { name: 'data', mountPath: '/workspace', subPath: 'scans/My_Scan.ID/workspace', readOnly: true },
+          { name: 'data', mountPath: '/prepared', subPath: 'scans/My_Scan.ID/prepared' },
+          { name: 'data', mountPath: '/prepare', subPath: 'scans/My_Scan.ID/prepare-script', readOnly: true },
+        ]),
+      );
+      const env = Object.fromEntries(container.env.map((e: any) => [e.name, e.value]));
+      expect(env).toMatchObject({ SCANNER_WORKSPACE: '/workspace', SCANNER_PREPARED: '/prepared', HTTPS_PROXY: `http://${PROXY_IP}:3128` });
+      // No model, so no key: nothing secret, and no Secret.
+      expect(container.envFrom).toBeUndefined();
+      expect(kube.created.secrets).toHaveLength(0);
+
+      expect(proxyPod().spec.containers[0].env).toContainEqual({ name: 'ALLOW', value: 'packages.example.org:443' });
+      expect(kube.log).toEqual([`networkpolicies/${name}-agent`, `networkpolicies/${name}-proxy`, `pods/${name}-proxy`, `pods/${name}`]);
+      // Its script copied onto the volume, its log kept, and everything else removed.
+      expect(await readFile(join(dataDir, 'scans', 'My_Scan.ID', 'prepare-script', 'run.sh'), 'utf8')).toBe('echo hi\n');
+      expect(await readFile(req.logPath, 'utf8')).toBe('prepared 2 archives\n');
+      expect(kube.logRequests.every((q) => q.includes('container=preparation'))).toBe(true);
+      for (const store of Object.values(kube.stores)) expect(store.size).toBe(0);
+    });
+
+    it("returns its script's exit code", async () => {
+      kube.script = { statuses: [prepTerminated(3)] };
+      await makeRunner();
+      expect(await runner.runPreparation(await preparation())).toEqual({ exitCode: 3 });
+    });
+
+    it("runs it, and the Attempts, in the profile's agent image variant (ADR-0016)", async () => {
+      kube.script = { statuses: [prepTerminated(0)] };
+      await makeRunner();
+      await runner.runPreparation(await preparation({ imageVariant: 'full' }));
+      expect(agentPod().spec.containers[0].image).toBe('ghcr.io/acme/ai-scanner-agent-full:1.2.3');
+
+      kube.created.pods.length = 0;
+      kube.script = { statuses: [terminated(0)] };
+      await runner.run(await request({ imageVariant: 'full' }));
+      expect(agentPod().spec.containers[0].image).toBe('ghcr.io/acme/ai-scanner-agent-full:1.2.3');
+    });
+
+    it('says which image cannot be pulled, so the Scan fails at once', async () => {
+      kube.script = { statuses: [{ phase: 'Pending', containerStatuses: [{ name: 'agent', state: { waiting: { reason: 'ImagePullBackOff', message: 'not found' } } }] }] };
+      await makeRunner();
+      const attempt = runner.run(await request({ imageVariant: 'full' }));
+      await expect(attempt).rejects.toBeInstanceOf(AgentImageUnavailableError);
+      await expect(attempt).rejects.toThrow(/^The agent image ghcr.io\/acme\/ai-scanner-agent-full:1.2.3 is not available: pod .*ImagePullBackOff: not found/);
+      for (const store of Object.values(kube.stores)) expect(store.size).toBe(0);
+    });
+
+    it('cannot tell a variant of an agent image named by digest', async () => {
+      await makeRunner({ agentImage: 'ghcr.io/acme/ai-scanner-agent@sha256:abc' });
+      await expect(runner.runPreparation(await preparation({ imageVariant: 'full' }))).rejects.toBeInstanceOf(AgentImageUnavailableError);
+      expect(agentPod()).toBeUndefined();
+    });
+
+    it('mounts what it wrote read-only into the agent pod', async () => {
+      await makeRunner();
+      const preparedDir = join(dataDir, 'scans', 'My_Scan.ID', 'prepared');
+      await mkdir(preparedDir, { recursive: true });
+      await runner.run(await request({ preparedDir }));
+      expect(agentPod().spec.containers[0].volumeMounts).toContainEqual({
+        name: 'data',
+        mountPath: '/prepared',
+        subPath: 'scans/My_Scan.ID/prepared',
+        readOnly: true,
+      });
+    });
   });
 
   it("mounts a Scan's own skills snapshot where it is, on the data volume", async () => {

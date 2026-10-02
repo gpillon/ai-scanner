@@ -25,8 +25,16 @@ A Saved Repository and a Scan's choices, with when the server starts Scans of it
 _Avoid_: Cron job, recurring scan, timer
 
 **Scan Profile**:
-A named kind of analysis a caller can request, bundling the agent skills and instructions that produce its Report.
+A named kind of analysis a caller can request, bundling the agent skills and instructions that produce its Report; it may also bring a Preparation, name the hosts its Scans may reach besides the model (`egressAllow`, ADR-0015), and an Agent Image Variant to run in (ADR-0016).
 _Avoid_: Skill, scan type, analysis type
+
+**Preparation**:
+A Scan Profile's script (`prepare/run.sh`) that the server runs once per Scan, before the Warm-up and the first Attempt, without a model and isolated like the agent; it reads the code and writes what the agent then reads, read-only, in `/prepared` (ADR-0015). A failed Preparation fails the Scan.
+_Avoid_: Pre-processing, setup, hook, pre-scan
+
+**Agent Image Variant**:
+An image built on the agent image with tools added, which a Scan Profile names (`"agentImage": "full"`) to run its Preparation and Attempts in; the server finds it beside the agent image, its repository suffixed with `-<variant>`, same tag (ADR-0016).
+_Avoid_: Custom image, full image, profile image
 
 **Skill Pack**:
 A named group of agent skills that an admin imports, and a caller can add to a Scan on top of its Scan Profile's own skills (ADR-0008).

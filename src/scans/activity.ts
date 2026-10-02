@@ -26,13 +26,14 @@ const MAX_ARG = 200;
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 
-/** A path as the caller knows it: relative to their code, to the output, or to the skills. */
+/** A path as the caller knows it: relative to their code, to the output, to the skills, or to what the Preparation wrote. */
 function shortPath(p: unknown): string {
   if (typeof p !== 'string') return '';
   for (const [root, shown] of [
     ['/workspace', ''],
     ['/output', 'output/'],
     ['/skills', 'skills/'],
+    ['/prepared', 'prepared/'],
   ] as const) {
     if (p === root) return shown || '.';
     if (p.startsWith(`${root}/`)) return shown + p.slice(root.length + 1);

@@ -107,3 +107,68 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # The agent image's `full` variant (ADR-0016), layered on the agent image this run pushed, by
+  # its commit tag, so both carry the same opencode. Its tags follow the agent image's.
+  agent-full-image:
+    name: Build ai-scanner-agent-full image
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pull requests push nothing, so there is no agent image to start from: build both here,
+      # to prove they build.
+      - name: Build on the agent image (pull request)
+        if: github.event_name == 'pull_request'
+        run: |
+          docker build -t ai-scanner-agent:pr containers/agent
+          docker build --build-arg BASE_IMAGE=ai-scanner-agent:pr -t ai-scanner-agent-full:pr containers/agent-full
+
+      - uses: docker/setup-buildx-action@v3
+        if: github.event_name != 'pull_request'
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image names
+        id: name
+        if: github.event_name != 'pull_request'
+        run: |
+          owner="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          echo "image=$owner/ai-scanner-agent-full" >> "$GITHUB_OUTPUT"
+          # The `type=sha` tag the image job gave the agent image.
+          echo "base=$owner/ai-scanner-agent:sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - id: meta
+        if: github.event_name != 'pull_request'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.name.outputs.image }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        if: github.event_name != 'pull_request'
+        with:
+          context: containers/agent-full
+          file: containers/agent-full/Containerfile
+          build-args: BASE_IMAGE=${{ steps.name.outputs.base }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=ai-scanner-agent-full
+          cache-to: type=gha,mode=max,scope=ai-scanner-agent-full

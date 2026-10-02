@@ -10,7 +10,7 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { Clock, Timer } from '../src/common/clock';
 import { AppConfig, loadConfig, MINUTE_MS } from '../src/config/app-config';
-import { AttemptRequest, AttemptResult, Runner } from '../src/runner/runner';
+import { AttemptRequest, AttemptResult, PreparationRequest, Runner } from '../src/runner/runner';
 import { RetentionSweeper } from '../src/scans/retention-sweeper.service';
 
 export const TOKEN = 'test-token';
@@ -119,10 +119,15 @@ export class Gate {
   }
 }
 
+export type PreparationScript = (req: PreparationRequest, ctl: AttemptControl) => Promise<AttemptResult | void>;
+
 /** Scriptable stand-in for the agent: the only fake in the suite. */
 export class FakeRunner extends Runner {
   script: Script = scripts.writeReport();
+  /** What a profile's Preparation does: by default, it writes nothing and exits 0. */
+  preparation: PreparationScript = async () => undefined;
   readonly calls: AttemptRequest[] = [];
+  readonly preparationCalls: PreparationRequest[] = [];
   readonly stopCalls: string[] = [];
   private readonly stops = new Map<string, () => void>();
 
@@ -131,6 +136,13 @@ export class FakeRunner extends Runner {
     const stopped = new Promise<void>((resolve) => this.stops.set(req.scanId, resolve));
     await writeFile(req.transcriptPath, `transcript of ${req.scanId} Attempt ${req.attempt}\n`);
     return (await this.script(req, { stopped })) ?? { exitCode: 0 };
+  }
+
+  async runPreparation(req: PreparationRequest): Promise<AttemptResult> {
+    this.preparationCalls.push(req);
+    const stopped = new Promise<void>((resolve) => this.stops.set(req.scanId, resolve));
+    await writeFile(req.logPath, `preparation of ${req.scanId}\n`);
+    return (await this.preparation(req, { stopped })) ?? { exitCode: 0 };
   }
 
   /** Scan ids in the order their first Attempt started. */

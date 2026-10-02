@@ -1,0 +1,21 @@
+# The `full` variant of the agent image (ADR-0016): the agent image, plus command-line tools a
+# Scan Profile's Preparation script may use (ADR-0015). A profile picks it with
+# `"agentImage": "full"`; the server then runs that profile's Preparation and Attempts in
+# `<agent image repository>-full:<same tag>`.
+#   podman build -t localhost/ai-scanner-agent-full:latest \
+#     --build-arg BASE_IMAGE=localhost/ai-scanner-agent:latest containers/agent-full
+# (or: make agent-full-image). Build it from the agent image of the same version: it only adds
+# layers on top, so opencode and the Runners' command are the base image's.
+ARG BASE_IMAGE=localhost/ai-scanner-agent:latest
+FROM ${BASE_IMAGE}
+
+# The user the base image runs as, restored after installing: root for the stock agent image,
+# which sets none (the Runners choose the user: rootless Podman, or the server's uid on Kubernetes).
+ARG BASE_USER=root
+
+# The agent gains nothing from these: opencode denies it every command. Only a Preparation runs them.
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends unzip python3 perl jq curl binutils \
+ && rm -rf /var/lib/apt/lists/*
+USER ${BASE_USER}

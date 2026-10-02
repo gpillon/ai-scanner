@@ -4,9 +4,9 @@ import { createWriteStream, WriteStream } from 'node:fs';
 import { cp, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { AppConfig, KubernetesConfig } from '../config/app-config';
-import { agentCommand, agentEnv, agentSecrets, IN_CONTAINER } from './agent-spec';
+import { agentCommand, agentEnv, agentSecrets, IN_CONTAINER, PREPARATION_COMMAND, preparationEnv, variantImageOrThrow } from './agent-spec';
 import { inClusterConnection, KubeApi, KubeApiError } from './kube-api';
-import { AttemptRequest, AttemptResult, Runner } from './runner';
+import { AgentImageUnavailableError, AttemptRequest, AttemptResult, PreparationRequest, Runner } from './runner';
 
 /** Labels and annotations the Runner puts on what it creates. */
 export const K8S = {
@@ -27,6 +27,8 @@ const PROXY_PORT = 3128;
 const PROXY_COMMAND = ['node', '/app/containers/egress-proxy/proxy.js'];
 /** Waiting reasons that never resolve on their own: the Attempt ends now, not at its timeout. */
 const FATAL_WAITING = new Set(['ErrImagePull', 'ImagePullBackOff', 'InvalidImageName', 'CreateContainerConfigError', 'CreateContainerError']);
+/** Of those, the ones that say the image cannot be had: every Attempt would fail alike. */
+const IMAGE_WAITING = new Set(['ErrImagePull', 'ImagePullBackOff', 'InvalidImageName']);
 /** How long a pod may stay unschedulable (a cluster autoscaler may still add a node). */
 const UNSCHEDULABLE_GRACE_MS = 3 * 60_000;
 /** How long the egress proxy may take to be ready. */
@@ -72,10 +74,37 @@ interface RunningAttempt {
   stopped: boolean;
 }
 
+/** What one pod of the Runner does for a Scan: an Attempt, or the Scan's Preparation. */
+interface PodJob {
+  scanId: string;
+  /** Annotated on everything it creates: the Attempt's number, or `preparation`. */
+  attempt: string;
+  timeoutMs: number;
+  /** The `host:port` endpoints its egress proxy lets through. */
+  allow: string[];
+}
+
+/** What a pod of the Runner needs once the Runner knows its environment. */
+interface PodSetup {
+  /** Its secret environment: in a Secret of its own, owned by the pod. */
+  secrets: Record<string, string>;
+  /** The image it runs: the agent image, or the profile's variant of it (ADR-0016). */
+  image: string;
+  manifest: (proxyUrl: string, secretName?: string) => object;
+}
+
 /** A DNS-1123 name for an Attempt's pod: Scan ids are the caller's (ADR-0002), so they are hashed. */
 export function attemptPodName(scanId: string, attempt: number): string {
   return `ai-scanner-${scanHash(scanId)}-${attempt}`;
 }
+
+/** The name of a Scan's Preparation pod (ADR-0015). */
+export function preparationPodName(scanId: string): string {
+  return `ai-scanner-${scanHash(scanId)}-prep`;
+}
+
+/** The container of a Preparation pod: its log is the Preparation's. */
+const PREPARATION_CONTAINER = 'preparation';
 
 function scanHash(scanId: string): string {
   return createHash('sha256').update(scanId).digest('hex').slice(0, 12);
@@ -103,6 +132,10 @@ export function agentImageFor(serverImage: string): string | undefined {
  * endpoint, fixed at start. Two NetworkPolicies of the Attempt let the agent reach only that
  * proxy, and let only that agent reach it; the chart's policies deny everything else to agent
  * and proxy pods. The agent reaches the proxy by IP, so it needs no DNS either.
+ *
+ * A Scan's Preparation runs the same way, in a pod of the agent image labelled as an agent, so
+ * the same policies hold it: its script for command, /prepared writable, no Secret, and a proxy
+ * letting through only its profile's endpoints (ADR-0015).
  */
 export class KubernetesRunner extends Runner implements OnModuleInit {
   private readonly log = new Logger(KubernetesRunner.name);
@@ -135,10 +168,47 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
   }
 
   async run(request: AttemptRequest): Promise<AttemptResult> {
-    const attempt: RunningAttempt = { pod: attemptPodName(request.scanId, request.attempt), stopped: false };
-    this.running.set(request.scanId, attempt); // before any await: see Runner.stop
+    const name = attemptPodName(request.scanId, request.attempt);
+    const job = { scanId: request.scanId, attempt: String(request.attempt), timeoutMs: request.attemptTimeoutMs, allow: request.modelEgress };
+    return this.launch(job, name, 'agent', request.transcriptPath, async (env) => {
+      const skills = request.skillsDir && (await this.onVolume(env, request.skillsDir, request.workspaceDir, 'agent-skills'));
+      return {
+        secrets: agentSecrets(request.agentModel, this.k8s.agentEnv, (m) => this.log.warn(m)),
+        image: variantImageOrThrow(env.agentImage, request.imageVariant),
+        manifest: (proxyUrl, secretName) => this.podManifest(env, name, request, proxyUrl, skills, secretName),
+      };
+    });
+  }
+
+  async runPreparation(request: PreparationRequest): Promise<AttemptResult> {
+    const name = preparationPodName(request.scanId);
+    const job = { scanId: request.scanId, attempt: 'preparation', timeoutMs: request.timeoutMs, allow: request.egress };
+    return this.launch(job, name, PREPARATION_CONTAINER, request.logPath, async (env) => {
+      const scriptDir = await this.onVolume(env, request.scriptDir, request.workspaceDir, 'prepare-script');
+      return {
+        secrets: {},
+        image: variantImageOrThrow(env.agentImage, request.imageVariant),
+        manifest: (proxyUrl) => this.preparationPodManifest(env, name, job, request, proxyUrl, scriptDir),
+      };
+    });
+  }
+
+  /**
+   * Runs one pod (`name`, whose `container` it waits for) behind an egress proxy pod of its own
+   * that lets through `job.allow` only, under NetworkPolicies of its own; its log goes to
+   * `logPath`. Everything it created goes once it exits.
+   */
+  private async launch(
+    job: PodJob,
+    name: string,
+    container: string,
+    logPath: string,
+    setup: (env: KubernetesEnvironment) => Promise<PodSetup>,
+  ): Promise<AttemptResult> {
+    const attempt: RunningAttempt = { pod: name, stopped: false };
+    this.running.set(job.scanId, attempt); // before any await: see Runner.stop
     const env = await this.prepared().catch((e) => {
-      this.running.delete(request.scanId);
+      this.running.delete(job.scanId);
       throw e;
     });
     const api = this.api!;
@@ -149,38 +219,34 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
     try {
       // Leftovers of the same Attempt, should a previous server have died mid-way.
       await this.removeAttempt(api, env, attempt.pod);
-      const skills = request.skillsDir && (await this.skillsOnVolume(env, request));
-      const secretEnv = agentSecrets(request.agentModel, this.k8s.agentEnv, (m) => this.log.warn(m));
-      const withSecret = Object.keys(secretEnv).length > 0;
+      const { secrets, image, manifest } = await setup(env);
+      const withSecret = Object.keys(secrets).length > 0;
 
       // The policies first: the proxy and the agent never run unconfined, not even briefly.
-      for (const policy of this.networkPolicies(env, request, attempt.pod)) await api.post(policies, policy);
-      await api.post(`${ns}/pods`, this.proxyManifest(env, request, proxy, attempt.pod));
+      for (const policy of this.networkPolicies(env, job, attempt.pod)) await api.post(policies, policy);
+      await api.post(`${ns}/pods`, this.proxyManifest(env, job, proxy, attempt.pod));
       const proxyIp = await this.waitForProxy(api, `${ns}/pods/${proxy}`, attempt);
       if (proxyIp === undefined) return { exitCode: 137 };
 
-      if (withSecret) await api.post(`${ns}/secrets`, this.secretManifest(env, secretName, request, attempt.pod, secretEnv));
+      if (withSecret) await api.post(`${ns}/secrets`, this.secretManifest(env, secretName, job, attempt.pod, secrets));
       if (attempt.stopped) return { exitCode: 137 };
-      const pod = await api.post<PodStatus>(
-        `${ns}/pods`,
-        this.podManifest(env, attempt.pod, request, `http://${proxyIp}:${PROXY_PORT}`, skills, withSecret ? secretName : undefined),
-      );
+      const pod = await api.post<PodStatus>(`${ns}/pods`, manifest(`http://${proxyIp}:${PROXY_PORT}`, withSecret ? secretName : undefined));
       if (withSecret) {
         // The Secret now goes away with the pod, whatever happens to this process.
         await api.patch(`${ns}/secrets/${secretName}`, {
           metadata: { ownerReferences: [{ apiVersion: 'v1', kind: 'Pod', name: pod.metadata.name, uid: pod.metadata.uid }] },
         });
       }
-      const log = new LogFollower(api, `${ns}/pods/${attempt.pod}/log?container=agent`, request.transcriptPath);
+      const log = new LogFollower(api, `${ns}/pods/${attempt.pod}/log?container=${container}`, logPath);
       try {
-        const exitCode = await this.waitForExit(api, `${ns}/pods/${attempt.pod}`, attempt, () => log.start());
+        const exitCode = await this.waitForExit(api, `${ns}/pods/${attempt.pod}`, attempt, container, image, () => log.start());
         if (exitCode !== undefined) await log.complete();
         return { exitCode: exitCode ?? 137 };
       } finally {
         await log.close();
       }
     } finally {
-      if (this.running.get(request.scanId) === attempt) this.running.delete(request.scanId);
+      if (this.running.get(job.scanId) === attempt) this.running.delete(job.scanId);
       await this.removeAttempt(api, env, attempt.pod).catch((e) => this.log.warn(`Could not clean up ${attempt.pod}: ${e.message}`));
     }
   }
@@ -318,16 +384,16 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
   }
 
   /**
-   * The skills directory as the pod can mount it: as it is when already on the data volume (a
-   * Scan's own snapshot), else a copy there, next to the workspace (a profile's skills, which
-   * live in the server image).
+   * A directory as the pod can mount it: as it is when already on the data volume (a Scan's own
+   * snapshot of skills), else a copy there, named `name`, next to the workspace (a profile's
+   * skills or Preparation, which live in the server image).
    */
-  private async skillsOnVolume(env: KubernetesEnvironment, request: AttemptRequest): Promise<string> {
-    const rel = relative(env.dataMount.path, resolve(request.skillsDir!));
-    if (!rel.startsWith('..') && !isAbsolute(rel)) return request.skillsDir!;
-    const target = join(dirname(request.workspaceDir), 'agent-skills');
+  private async onVolume(env: KubernetesEnvironment, dir: string, workspaceDir: string, name: string): Promise<string> {
+    const rel = relative(env.dataMount.path, resolve(dir));
+    if (!rel.startsWith('..') && !isAbsolute(rel)) return dir;
+    const target = join(dirname(workspaceDir), name);
     await rm(target, { recursive: true, force: true });
-    await cp(request.skillsDir!, target, { recursive: true });
+    await cp(dir, target, { recursive: true });
     return target;
   }
 
@@ -338,32 +404,32 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
     return posix.join(env.dataMount.subPath, rel.split(sep).join('/'));
   }
 
-  private labels(env: KubernetesEnvironment, request: AttemptRequest, pod: string, component: string): Record<string, string> {
+  private labels(env: KubernetesEnvironment, job: PodJob, pod: string, component: string): Record<string, string> {
     return {
       [K8S.name]: 'ai-scanner',
       [K8S.component]: component,
       [K8S.instance]: env.instance,
       [K8S.managedBy]: env.instance,
-      [K8S.scan]: scanHash(request.scanId),
+      [K8S.scan]: scanHash(job.scanId),
       [K8S.attemptPod]: pod,
     };
   }
 
-  private metadata(env: KubernetesEnvironment, request: AttemptRequest, name: string, pod: string, component: string): object {
+  private metadata(env: KubernetesEnvironment, job: PodJob, name: string, pod: string, component: string): object {
     return {
       name,
-      labels: this.labels(env, request, pod, component),
-      annotations: { [K8S.scanId]: request.scanId, [K8S.attempt]: String(request.attempt) },
+      labels: this.labels(env, job, pod, component),
+      annotations: { [K8S.scanId]: job.scanId, [K8S.attempt]: job.attempt },
       // Owned by the server pod: the cluster removes them along with it.
       ...(env.owner && { ownerReferences: [{ apiVersion: 'v1', kind: 'Pod', name: env.owner.name, uid: env.owner.uid }] }),
     };
   }
 
-  private secretManifest(env: KubernetesEnvironment, name: string, request: AttemptRequest, pod: string, data: Record<string, string>): object {
+  private secretManifest(env: KubernetesEnvironment, name: string, job: PodJob, pod: string, data: Record<string, string>): object {
     return {
       apiVersion: 'v1',
       kind: 'Secret',
-      metadata: { name, labels: this.labels(env, request, pod, 'agent'), annotations: { [K8S.scanId]: request.scanId } },
+      metadata: { name, labels: this.labels(env, job, pod, 'agent'), annotations: { [K8S.scanId]: job.scanId } },
       type: 'Opaque',
       stringData: data,
     };
@@ -373,7 +439,7 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
    * The Attempt's own reachability, on top of the chart's deny-all for agent and proxy pods: its
    * agent may open connections to its proxy's port, and its proxy accepts them from its agent only.
    */
-  networkPolicies(env: KubernetesEnvironment, request: AttemptRequest, pod: string): object[] {
+  networkPolicies(env: KubernetesEnvironment, job: PodJob, pod: string): object[] {
     const agent = { matchLabels: { [K8S.attemptPod]: pod, [K8S.component]: 'agent' } };
     const proxy = { matchLabels: { [K8S.attemptPod]: pod, [K8S.component]: 'egress-proxy' } };
     const port = [{ port: PROXY_PORT, protocol: 'TCP' }];
@@ -381,13 +447,13 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
       {
         apiVersion: 'networking.k8s.io/v1',
         kind: 'NetworkPolicy',
-        metadata: this.metadata(env, request, `${pod}-agent`, pod, 'agent'),
+        metadata: this.metadata(env, job, `${pod}-agent`, pod, 'agent'),
         spec: { podSelector: agent, policyTypes: ['Egress'], egress: [{ to: [{ podSelector: proxy }], ports: port }] },
       },
       {
         apiVersion: 'networking.k8s.io/v1',
         kind: 'NetworkPolicy',
-        metadata: this.metadata(env, request, `${pod}-proxy`, pod, 'egress-proxy'),
+        metadata: this.metadata(env, job, `${pod}-proxy`, pod, 'egress-proxy'),
         spec: { podSelector: proxy, policyTypes: ['Ingress'], ingress: [{ from: [{ podSelector: agent }], ports: port }] },
       },
     ];
@@ -413,11 +479,11 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
   };
 
   /** Settings agent and proxy pods share: no token, no service links, no restart, a deadline. */
-  private podBasics(env: KubernetesEnvironment, request: AttemptRequest): object {
+  private podBasics(env: KubernetesEnvironment, job: PodJob): object {
     return {
       restartPolicy: 'Never',
       // A backstop only: the supervisor stops the Attempt at its own timeout.
-      activeDeadlineSeconds: Math.ceil(request.attemptTimeoutMs / 1000) + 300,
+      activeDeadlineSeconds: Math.ceil(job.timeoutMs / 1000) + 300,
       terminationGracePeriodSeconds: 5,
       automountServiceAccountToken: false,
       enableServiceLinks: false,
@@ -427,21 +493,21 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
     };
   }
 
-  /** The Attempt's egress proxy: it lets through the Scan's model endpoint, and nothing else. */
-  proxyManifest(env: KubernetesEnvironment, request: AttemptRequest, name: string, pod: string): object {
+  /** The Attempt's egress proxy: it lets through the Scan's model endpoint and its profile's, and nothing else. */
+  proxyManifest(env: KubernetesEnvironment, job: PodJob, name: string, pod: string): object {
     return {
       apiVersion: 'v1',
       kind: 'Pod',
-      metadata: this.metadata(env, request, name, pod, 'egress-proxy'),
+      metadata: this.metadata(env, job, name, pod, 'egress-proxy'),
       spec: {
-        ...this.podBasics(env, request),
+        ...this.podBasics(env, job),
         containers: [
           {
             name: 'egress-proxy',
             image: env.proxyImage,
             command: PROXY_COMMAND,
             env: [
-              { name: 'ALLOW', value: request.modelEgress.join(',') },
+              { name: 'ALLOW', value: job.allow.join(',') },
               { name: 'PORT', value: String(PROXY_PORT) },
             ],
             ports: [{ name: 'egress', containerPort: PROXY_PORT }],
@@ -456,19 +522,69 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
 
   /** The agent pod of an Attempt. */
   podManifest(env: KubernetesEnvironment, name: string, request: AttemptRequest, proxyUrl: string, skillsDir?: string, secretName?: string): object {
-    const mounts = [
-      { name: 'data', mountPath: IN_CONTAINER.workspace, subPath: this.subPath(env, request.workspaceDir), readOnly: true },
-      { name: 'data', mountPath: IN_CONTAINER.output, subPath: this.subPath(env, request.outputDir) },
-      ...(skillsDir ? [{ name: 'data', mountPath: IN_CONTAINER.skills, subPath: this.subPath(env, skillsDir), readOnly: true }] : []),
-      { name: 'tmp', mountPath: '/tmp' },
-      { name: 'home', mountPath: IN_CONTAINER.home },
-    ];
+    const job = { scanId: request.scanId, attempt: String(request.attempt), timeoutMs: request.attemptTimeoutMs, allow: request.modelEgress };
+    const mount = (path: string, dir: string, readOnly: boolean) => ({
+      name: 'data',
+      mountPath: path,
+      subPath: this.subPath(env, dir),
+      ...(readOnly && { readOnly }),
+    });
+    return this.agentImagePod(env, job, name, {
+      name: 'agent',
+      image: variantImageOrThrow(env.agentImage, request.imageVariant),
+      command: agentCommand(request, request.agentModel),
+      workingDir: IN_CONTAINER.workspace,
+      env: agentEnv(request, request.agentModel, proxyUrl),
+      secretName,
+      mounts: [
+        mount(IN_CONTAINER.workspace, request.workspaceDir, true),
+        mount(IN_CONTAINER.output, request.outputDir, false),
+        ...(skillsDir ? [mount(IN_CONTAINER.skills, skillsDir, true)] : []),
+        ...(request.preparedDir ? [mount(IN_CONTAINER.prepared, request.preparedDir, true)] : []),
+      ],
+    });
+  }
+
+  /** The pod of a Scan's Preparation: the profile's script, with /prepared writable (ADR-0015). */
+  preparationPodManifest(env: KubernetesEnvironment, name: string, job: PodJob, request: PreparationRequest, proxyUrl: string, scriptDir: string): object {
+    return this.agentImagePod(env, job, name, {
+      name: PREPARATION_CONTAINER,
+      image: variantImageOrThrow(env.agentImage, request.imageVariant),
+      command: PREPARATION_COMMAND,
+      workingDir: IN_CONTAINER.prepared,
+      env: preparationEnv(proxyUrl),
+      mounts: [
+        { name: 'data', mountPath: IN_CONTAINER.workspace, subPath: this.subPath(env, request.workspaceDir), readOnly: true },
+        { name: 'data', mountPath: IN_CONTAINER.prepared, subPath: this.subPath(env, request.preparedDir) },
+        { name: 'data', mountPath: IN_CONTAINER.prepare, subPath: this.subPath(env, scriptDir), readOnly: true },
+      ],
+    });
+  }
+
+  /**
+   * A pod of the agent image, labelled as an agent so the NetworkPolicies confine it: the data
+   * claim's `mounts`, a small /tmp and home, no DNS, and the server's node when it must share it.
+   */
+  private agentImagePod(
+    env: KubernetesEnvironment,
+    job: PodJob,
+    name: string,
+    container: {
+      name: string;
+      image: string;
+      command: string[];
+      workingDir: string;
+      env: Record<string, string>;
+      secretName?: string;
+      mounts: object[];
+    },
+  ): object {
     return {
       apiVersion: 'v1',
       kind: 'Pod',
-      metadata: this.metadata(env, request, name, name, 'agent'),
+      metadata: this.metadata(env, job, name, name, 'agent'),
       spec: {
-        ...this.podBasics(env, request),
+        ...this.podBasics(env, job),
         // No DNS: the agent reaches its proxy by IP, and the NetworkPolicies drop DNS anyway. A
         // resolver on loopback, where nothing listens, makes any lookup fail at once instead of
         // waiting out timeouts on dropped packets (20 s each, before search domains).
@@ -485,18 +601,18 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
         }),
         containers: [
           {
-            name: 'agent',
-            image: env.agentImage,
-            command: agentCommand(request, request.agentModel),
-            workingDir: IN_CONTAINER.workspace,
-            env: Object.entries(agentEnv(request, request.agentModel, proxyUrl)).map(([n, value]) => ({ name: n, value })),
-            ...(secretName && { envFrom: [{ secretRef: { name: secretName } }] }),
+            name: container.name,
+            image: container.image,
+            command: container.command,
+            workingDir: container.workingDir,
+            env: Object.entries(container.env).map(([n, value]) => ({ name: n, value })),
+            ...(container.secretName && { envFrom: [{ secretRef: { name: container.secretName } }] }),
             resources: {
               limits: { memory: this.k8s.memory, cpu: this.k8s.cpu },
               requests: { memory: '256Mi', cpu: '100m' },
             },
             securityContext: this.containerSecurity,
-            volumeMounts: mounts,
+            volumeMounts: [...container.mounts, { name: 'tmp', mountPath: '/tmp' }, { name: 'home', mountPath: IN_CONTAINER.home }],
           },
         ],
         volumes: [
@@ -511,7 +627,7 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
   /** The proxy pod's IP once it is ready to accept connections; undefined if the Attempt was stopped meanwhile. */
   private async waitForProxy(api: KubeApi, path: string, attempt: RunningAttempt): Promise<string | undefined> {
     const deadline = Date.now() + PROXY_READY_TIMEOUT_MS;
-    return this.poll(api, path, attempt, 'egress-proxy', (pod) => {
+    return this.poll(api, path, attempt, 'egress-proxy', undefined, (pod) => {
       const ready = pod.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
       if (ready && pod.status?.podIP) return { value: pod.status.podIP };
       if (Date.now() > deadline) throw new Error(`The egress proxy ${pod.metadata.name} was not ready within ${PROXY_READY_TIMEOUT_MS / 1000} s`);
@@ -520,11 +636,19 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
   }
 
   /**
-   * Polls the pod until its agent exits, and returns the exit code; undefined once the pod is
-   * gone because the Attempt was stopped. A pod that can never start ends the Attempt at once.
+   * Polls the pod until its `containerName` (the agent, or the Preparation) exits, and returns the
+   * exit code; undefined once the pod is gone because the Attempt was stopped. A pod that can
+   * never start ends the Attempt at once.
    */
-  private waitForExit(api: KubeApi, path: string, attempt: RunningAttempt, started: () => void): Promise<number | undefined> {
-    return this.poll(api, path, attempt, 'agent', (pod, container) => {
+  private waitForExit(
+    api: KubeApi,
+    path: string,
+    attempt: RunningAttempt,
+    containerName: string,
+    image: string,
+    started: () => void,
+  ): Promise<number | undefined> {
+    return this.poll(api, path, attempt, containerName, image, (pod, container) => {
       if (container?.state && !container.state.waiting) started();
       const terminated = container?.state?.terminated;
       if (terminated) return { value: terminated.exitCode };
@@ -534,13 +658,15 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
 
   /**
    * Polls a pod until `done` gives a value. Throws as soon as the pod can never get there: it
-   * ended, it cannot pull its image or start its container, or it stays unschedulable.
+   * ended, it cannot pull its image or start its container, or it stays unschedulable. With
+   * `image`, the agent image it runs: an image that cannot be pulled throws AgentImageUnavailableError.
    */
   private async poll<T>(
     api: KubeApi,
     path: string,
     attempt: RunningAttempt,
     containerName: string,
+    image: string | undefined,
     done: (pod: PodStatus, container?: NonNullable<NonNullable<PodStatus['status']>['containerStatuses']>[number]) => { value: T } | undefined,
   ): Promise<T | undefined> {
     const pollMs = this.options.pollMs ?? 2000;
@@ -566,6 +692,9 @@ export class KubernetesRunner extends Runner implements OnModuleInit {
       }
       const waiting = container?.state?.waiting;
       if (waiting?.reason && FATAL_WAITING.has(waiting.reason)) {
+        if (image && IMAGE_WAITING.has(waiting.reason)) {
+          throw new AgentImageUnavailableError(image, `pod ${name}: ${waiting.reason}: ${waiting.message ?? ''}`.trim());
+        }
         throw new Error(`Pod ${name} cannot start: ${waiting.reason}: ${waiting.message ?? ''}`.trim());
       }
       const scheduled = pod.status?.conditions?.find((c) => c.type === 'PodScheduled');

@@ -27,7 +27,16 @@ models from the admin UI, where API keys are stored encrypted. The NOTES printed
   - have no ServiceAccount token and no service links;
   - get the model key from a Secret per Attempt, owned by the pod.
 - **An egress proxy pod per Attempt**, also created by the server. It runs the server image
-  and lets through only that Scan's model endpoint. The agent reaches it by IP.
+  and lets through only that Scan's model endpoint, plus the hosts its Scan Profile lists in
+  `egressAllow`. The agent reaches it by IP.
+- **A Preparation pod per Scan**, for a Scan Profile with a `prepare/run.sh` (ADR-0015): the
+  agent image running that script once before the first Attempt, held like an agent pod,
+  with its own proxy.
+- **Agent image variants**. A Scan Profile may run its Preparation and Attempts in a variant
+  of the agent image, e.g. `"agentImage": "full"` for `ai-scanner-agent-full` (ADR-0016).
+  CI publishes `-full` beside the agent image at every release; a variant you build yourself
+  must be pushed next to the agent image, with the same tag, where the cluster can pull it.
+  A Scan whose image cannot be pulled fails at once, saying which image.
 - **NetworkPolicies**. The chart denies agent pods everything, DNS included, and keeps proxy
   pods unreachable. For each Attempt the server adds a pair: its agent may reach its own
   proxy, and nothing else may. They need a CNI that enforces NetworkPolicy (OVN-Kubernetes,
@@ -45,6 +54,7 @@ models from the admin UI, where API keys are stored encrypted. The NOTES printed
 | Data claim | the volume mounted at the data directory | `SCANNER_K8S_DATA_CLAIM` |
 | Node pinning | the claim's access mode | `SCANNER_K8S_COLOCATE` (`auto`/`always`/`never`) |
 | Agent image | its own image, `ai-scanner` → `ai-scanner-agent`, same tag | `agent.image` |
+| A profile's agent image variant | the agent image, `ai-scanner-agent` → `ai-scanner-agent-<variant>`, same tag (ADR-0016) | follows `agent.image` |
 | Proxy image | its own image, which ships the proxy | `SCANNER_K8S_PROXY_IMAGE` |
 | Pull secrets, fsGroup, UID | its own pod | |
 

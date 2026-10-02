@@ -114,7 +114,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json'
      -d '{"thinking":"on","thinkingLevel":"high"}' localhost:3000/api/admin/models/qwen3.8-27b
 ```
 
-Agents may reach every Provider that serves a model, and nothing else. The egress proxy picks changes up without a restart. A disabled model still serves the Scans already using it. `SCANNER_MODELS` only fills an empty database on its first start: after that, edits to it are ignored.
+Agents may reach every Provider that serves a model, and nothing else but the hosts their Scan Profile names (`egressAllow`, see [Isolation](#isolation)). The egress proxy picks changes up without a restart. A disabled model still serves the Scans already using it. `SCANNER_MODELS` only fills an empty database on its first start: after that, edits to it are ignored.
 
 The same operations are under `/api/admin` in the API reference.
 
@@ -176,6 +176,12 @@ Environment variables, read at startup. `.env.example` has a starting point.
 
 Each Attempt runs opencode in its own ephemeral Podman container ([ADR-0003](docs/adr/0003-isolated-container-per-scan.md)), or its own pod on Kubernetes ([ADR-0007](docs/adr/0007-kubernetes-runner.md)). The container has a read-only root filesystem and no capabilities. The code is mounted read-only and the agent has no shell. Its only network route out is an egress proxy of its own, started and removed with the Attempt, which lets through its Scan's model endpoint and nothing else. With Podman the agent and its proxy share an internal network no other Attempt can reach; on Kubernetes the proxy is a separate pod, and per-Attempt NetworkPolicies let the agent reach that proxy only. Source Archives are extracted with size and file-count limits and with path-traversal rejection.
 
+A Scan Profile may add three things. [Writing a Scan Profile](docs/scan-profiles.md) gives the details and examples.
+
+- A **Preparation** ([ADR-0015](docs/adr/0015-profile-preparation-and-egress.md)): `profiles/<name>/prepare/run.sh`, run once per Scan before the warm-up, as `bash /prepare/run.sh` with the same isolation, without a model. It reads the code in `/workspace` (read-only) and writes into `/prepared`, which every Attempt then mounts read-only. A non-zero exit or `prepareTimeoutMinutes` (30 by default) fails the Scan with the script's last line of output.
+- **`egressAllow`** in `profile.json` ([ADR-0015](docs/adr/0015-profile-preparation-and-egress.md)): hosts (`host` or `host:port`, 443 by default) its Scans' proxies let through besides the model, in the Preparation and in Attempts. Other profiles' Scans never get them.
+- **`agentImage`** in `profile.json` ([ADR-0016](docs/adr/0016-agent-image-variants-per-profile.md)): a variant of the agent image its Preparation and Attempts run in, such as `full` (the agent image plus `unzip`, `python3`, `perl`, `jq`, `curl`, `binutils`). It resolves to the agent image's repository with `-<variant>`, same tag.
+
 ## Container images
 
 The root [`Containerfile`](Containerfile) builds the service image. It is multi-stage: the UI is built with Vite, the backend with `nest build`, and the runtime image holds only production dependencies. It runs as `node`, listens on `3000` and keeps its data in the `/data` volume.
@@ -188,7 +194,7 @@ podman run --rm -p 3000:3000 -v ai-scanner-data:/data \
   ghcr.io/gpillon/ai-scanner:dev
 ```
 
-[`containers/agent/Containerfile`](containers/agent/Containerfile) builds the agent image the Podman Runner starts for each Attempt.
+[`containers/agent/Containerfile`](containers/agent/Containerfile) builds the agent image the Podman Runner starts for each Attempt. [`containers/agent-full/Containerfile`](containers/agent-full/Containerfile) builds its `full` variant on top of it, for profiles with `"agentImage": "full"` ([ADR-0016](docs/adr/0016-agent-image-variants-per-profile.md)); `make images` builds all three, and CI publishes all three at every release. [Writing a Scan Profile](docs/scan-profiles.md#agent-image-variants) shows how to make a variant of your own.
 
 The service image runs real Scans on Kubernetes and OpenShift, where it starts one agent pod per Attempt: see [Kubernetes and OpenShift](#kubernetes-and-openshift). Under Podman it cannot start sibling containers, so there run it with `SCANNER_RUNNER=fake`, or run the service directly on the host.
 
@@ -201,7 +207,7 @@ helm repo add ai-scanner https://gpillon.github.io/ai-scanner
 helm install scanner ai-scanner/ai-scanner -n ai-scanner --create-namespace
 ```
 
-The server runs the Kubernetes Runner ([ADR-0007](docs/adr/0007-kubernetes-runner.md)). Each Attempt is a hardened pod in the same namespace, mounting the server's data volume, and it reaches the network only through its own egress proxy pod, which lets through only the Scan's model, under NetworkPolicies: no DNS, nothing else. The server discovers its own setup from its pod: data claim, node, images and pull secrets.
+The server runs the Kubernetes Runner ([ADR-0007](docs/adr/0007-kubernetes-runner.md)). Each Attempt is a hardened pod in the same namespace, mounting the server's data volume, and it reaches the network only through its own egress proxy pod, which lets through only the Scan's model (and its profile's `egressAllow` hosts), under NetworkPolicies: no DNS, nothing else. A profile's Preparation runs the same way, in a pod of its own. The server discovers its own setup from its pod: data claim, node, images and pull secrets.
 
 ## CI
 
@@ -253,11 +259,12 @@ src/          NestJS backend, one folder per feature module
   artifacts/  Artifact store
   reports/    findings.json checks, Report Template, PDF rendering
 ui/           Web UI (Vite + React + PatternFly)
-profiles/     Scan Profiles: prompt, skills, Report Template
-containers/   Agent image and egress proxy
+profiles/     Scan Profiles: prompt, skills, Report Template, Preparation
+containers/   Agent image, its `full` variant, and the egress proxy
 charts/       Helm chart for Kubernetes and OpenShift
 test/         e2e suite and fixtures
 docs/adr/     Architecture decision records
+docs/scan-profiles.md   How to write a Scan Profile: Preparation, egress, agent image variants
 ```
 
 ## License

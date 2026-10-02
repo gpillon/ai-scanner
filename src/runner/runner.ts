@@ -26,6 +26,45 @@ export interface AttemptRequest {
   attemptTimeoutMs: number;
   /** The Scan Profile's choice: false keeps the main agent to coordinating reviewers (ADR-0012). */
   leadReadsCode: boolean;
+  /** Host directory the Scan's Preparation wrote, when its profile has one; the agent sees it, read-only, as `/prepared`. */
+  preparedDir?: string;
+  /** The Scan Profile's agent image variant (ADR-0016); absent: the agent image. */
+  imageVariant?: string;
+}
+
+/**
+ * The Scan Profile's Preparation (ADR-0015): its script, run once per Scan before any Attempt, in
+ * the agent's isolation but without a model.
+ */
+export interface PreparationRequest {
+  scanId: string;
+  /** Host directory holding the Source Archive contents; the script sees it, read-only, as `/workspace`. */
+  workspaceDir: string;
+  /** Host directory the script writes into, empty at start; it sees it as `/prepared`. */
+  preparedDir: string;
+  /** The profile's `prepare/` directory, holding `run.sh`; the script sees it, read-only, as `/prepare`. */
+  scriptDir: string;
+  /** Host file the Runner writes the script's output to; kept for debugging, never served. */
+  logPath: string;
+  /** The `host:port` endpoints the profile lets its Scans reach: all its proxy lets through. */
+  egress: string[];
+  /** How long the supervisor lets it run: the Runner's own deadline is only a backstop. */
+  timeoutMs: number;
+  /** The Scan Profile's agent image variant (ADR-0016); absent: the agent image. */
+  imageVariant?: string;
+}
+
+/**
+ * The image an Attempt or a Preparation needs cannot be had: not built, not pushed, or not
+ * derivable. Another Attempt would fail the same way, so the Scan fails at once.
+ */
+export class AgentImageUnavailableError extends Error {
+  constructor(
+    readonly image: string,
+    detail: string,
+  ) {
+    super(`The agent image ${image} is not available: ${detail}`);
+  }
 }
 
 /** A Model Pool model as the agent needs it. */
@@ -50,13 +89,18 @@ export interface AttemptResult {
   exitCode: number;
 }
 
-/** Runs one Attempt of the agent. Adapters: Podman/opencode, and a fake without any agent. */
+/**
+ * Runs one Attempt of the agent, or a Scan's Preparation. Adapters: Podman/opencode, Kubernetes,
+ * and a fake without any agent.
+ */
 export abstract class Runner {
   abstract run(request: AttemptRequest): Promise<AttemptResult>;
+  /** Runs the Preparation's script; a non-zero exit fails the Scan. */
+  abstract runPreparation(request: PreparationRequest): Promise<AttemptResult>;
   /**
-   * Stops the running Attempt of the Scan; the pending `run` settles. No-op when none runs.
-   * The supervisor only calls `run` when it has not been cancelled, so `run` must register
-   * the Attempt for `stop` before its first await.
+   * Stops the running Attempt or Preparation of the Scan; the pending `run` or `runPreparation`
+   * settles. No-op when none runs. The supervisor only calls them when the Scan has not been
+   * cancelled, so they must register for `stop` before their first await.
    */
   abstract stop(scanId: string): Promise<void>;
 }
@@ -73,6 +117,11 @@ export class PlaceholderRunner extends Runner {
     await writeFile(request.transcriptPath, 'fake Runner: no agent ran\n');
     await writeFile(join(request.outputDir, 'report.md'), PLACEHOLDER_REPORT);
     await writeFile(join(request.outputDir, 'findings.json'), JSON.stringify({ report: { summary: PLACEHOLDER_SUMMARY }, findings: [] }));
+    return { exitCode: 0 };
+  }
+  /** Runs no script: `/prepared` stays empty. */
+  async runPreparation(request: PreparationRequest): Promise<AttemptResult> {
+    await writeFile(request.logPath, 'fake Runner: no Preparation ran\n');
     return { exitCode: 0 };
   }
   async stop(): Promise<void> {}

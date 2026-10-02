@@ -32,6 +32,17 @@ describe('Agent configuration', () => {
   it('lets the lead start reviewers only', () => {
     expect(config.permission.task).toEqual({ '*': 'deny', [REVIEWER_AGENT]: 'allow' });
   });
+
+  it("lets every agent, lead included, read what the profile's Preparation wrote (ADR-0015)", () => {
+    const prepared = opencodeConfig(model, true, false, true) as Config;
+    for (const p of ['prepared/*', '../prepared/*']) expect(prepared.agent.build.permission.read[p]).toBe('allow');
+    expect(prepared.permission.external_directory['/prepared/*']).toBe('allow');
+    expect(prepared.agent[REVIEWER_AGENT].permission.external_directory['/prepared/*']).toBe('allow');
+    // Never writable: edits stay under /output.
+    expect(prepared.permission.edit).toEqual({ '*': 'deny', 'output/*': 'allow', '../output/*': 'allow' });
+    // And nothing of it without a Preparation.
+    expect(JSON.stringify(config)).not.toContain('prepared');
+  });
 });
 
 /** A model's options reach opencode as the model's own options (ADR-0013). */

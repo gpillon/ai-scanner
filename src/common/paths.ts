@@ -19,9 +19,16 @@ export const paths = {
   sourceCheckout: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'checkout'),
   workspace: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'workspace'),
   output: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'output'),
+  /** What the profile's Preparation wrote (ADR-0015): the agent sees it, read-only, as /prepared. */
+  prepared: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'prepared'),
+  /** The Preparation's own output (stdout and stderr): kept for debugging, never served. */
+  preparationLog: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'preparation.log'),
   /** `report.pdf` as rendered by the server, before it is stored as an Artifact. */
   renderedPdf: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'report.pdf'),
-  /** What the model warm-up did, one JSON line per step: the Scan's activity before Attempt 1. */
+  /**
+   * What the Preparation and the model warm-up did, one JSON line per step: the Scan's activity
+   * before Attempt 1.
+   */
   warmupLog: (dataDir: string, id: string) => join(dataDir, 'scans', id, 'warmup.log'),
   transcript: (dataDir: string, id: string, attempt: number) =>
     join(dataDir, 'scans', id, 'attempts', String(attempt), 'transcript.log'),
