@@ -9,6 +9,7 @@ export const MINUTE_MS = 60 * 1000;
 export const DAY_MS = 24 * 60 * MINUTE_MS;
 
 export interface ModelEntry {
+  /** The model's name at the Provider, also its id in the Model Pool. */
   id: string;
   provider: string;
   baseUrl?: string;

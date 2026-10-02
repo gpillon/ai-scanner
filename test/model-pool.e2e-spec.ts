@@ -54,6 +54,24 @@ describe('Model Pool administration', () => {
       ]);
     });
 
+    it('names a model without the `anthropic/` an id may start with, and keeps other slashes', async () => {
+      h = await startApp({
+        config: {
+          models: [
+            { id: 'anthropic/claude-x', provider: 'anthropic' },
+            { id: 'org/llm', provider: 'openai-compatible', baseUrl: 'http://h:8000/v1' },
+            { id: 'openrouter/auto', provider: 'openrouter' },
+          ],
+          defaultModel: 'anthropic/claude-x',
+        },
+      });
+      expect((await h.admin.get('/api/admin/models')).body.map((m: any) => [m.id, m.name])).toEqual([
+        ['anthropic/claude-x', 'claude-x'],
+        ['org/llm', 'org/llm'],
+        ['openrouter/auto', 'openrouter/auto'],
+      ]);
+    });
+
     it('happens once: what the admin removed does not come back after a restart', async () => {
       h = await startApp();
       for (const id of ['deep-model', 'fast-model']) expect((await h.admin.delete(`/api/admin/models/${id}`)).status).toBe(204);

@@ -142,7 +142,7 @@ Environment variables, read at startup. `.env.example` has a starting point.
 | `SCANNER_TOKEN` | required | Shared bearer token |
 | `SCANNER_ADMIN_TOKEN` | — | Admin token: opens the admin pages and routes. Without it, administration is disabled |
 | `SCANNER_SECRET_KEY` | — | Encrypts stored Provider API keys and Saved Repository tokens (16+ characters). Without it, neither can be stored |
-| `SCANNER_MODELS` | — | Seeds the Model Pool on the first start only, JSON: `[{"id","provider","baseUrl?","apiKeyEnv?"}]` |
+| `SCANNER_MODELS` | — | Seeds the Model Pool on the first start only, JSON: `[{"id","provider","baseUrl?","apiKeyEnv?"}]`, `id` being the model's name at the Provider |
 | `SCANNER_DEFAULT_MODEL` | first model | Default Model of that seed |
 | `SCANNER_RUNNER` | `auto` | `kubernetes` inside a pod, `podman` elsewhere; or set one of them, or `fake` (a placeholder Report) |
 | `SCANNER_AGENT_IMAGE` | `localhost/ai-scanner-agent:latest` | Image run for each Attempt |

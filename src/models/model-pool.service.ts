@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, Logger, Not
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { Clock } from '../common/clock';
-import { APP_CONFIG, AppConfig } from '../config/app-config';
+import { APP_CONFIG, AppConfig, ModelEntry } from '../config/app-config';
 import { AgentModel } from '../runner/runner';
 import { Scan } from '../scans/entities/scan.entity';
 import { PoolModel } from './entities/pool-model.entity';
@@ -43,6 +43,19 @@ function compact(options: { thinking?: 'on' | 'off' | null; thinkingLevel?: Thin
     ...(options.thinkingLevel && { thinkingLevel: options.thinkingLevel }),
   };
   return Object.keys(kept).length ? kept : null;
+}
+
+/** Provider kinds whose model names never hold a slash, so a leading `<kind>/` is never part of one. */
+const UNPREFIXED_KINDS = new Set(['anthropic', 'openai', 'google']);
+
+/**
+ * The name a SCANNER_MODELS entry's model has at its Provider: its id, less the leading
+ * `anthropic/` older examples put there. Other names stay whole: OpenRouter, Groq and
+ * OpenAI-compatible Providers have names with a slash of their own (`openrouter/auto`).
+ */
+function seededName(entry: ModelEntry): string {
+  const prefix = `${entry.provider}/`;
+  return UNPREFIXED_KINDS.has(entry.provider) && entry.id.startsWith(prefix) ? entry.id.slice(prefix.length) : entry.id;
 }
 
 /**
@@ -94,7 +107,7 @@ export class ModelPool implements OnModuleInit {
         await tx.insert(PoolModel, {
           id: entry.id,
           providerId,
-          name: entry.id,
+          name: seededName(entry),
           enabled: true,
           isDefault: entry.id === this.config.defaultModel,
           position: position++,
