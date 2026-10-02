@@ -102,6 +102,11 @@ export interface ReportView {
   recommendations: string[];
   dismissed: { title: string; location: string | null; reason: string }[];
   findings: FindingView[];
+  /**
+   * `findings.json` as the agent wrote it, valid against the profile's schema: what a profile's own
+   * template renders beyond the fields above. Like the rest, it is the agent's text, shown as data.
+   */
+  data: unknown;
 }
 
 const LABELS: Record<Severity | 'minimal', string> = {
@@ -257,6 +262,7 @@ export async function buildReportView(data: unknown, ctx: ReportContext): Promis
       .filter((d) => text(d.title))
       .map((d) => ({ title: text(d.title)!, location: text(d.location), reason: text(d.reason) ?? '' })),
     findings,
+    data,
   };
 }
 

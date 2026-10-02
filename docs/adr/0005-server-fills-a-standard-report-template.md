@@ -23,6 +23,7 @@ We chose this because a Report must be standard: the same sections, in the same 
 - The Report's fixed text is in English; the agent's text is in the Scan's language.
 - Profiles without a template keep the ADR-0001 contract: the agent writes `report.md`, and the server renders the PDF from it with pdfkit.
 - The agent cannot run scripts, so a skill cannot validate or render its own output; that work belongs to the server.
+- The view also holds `data`, the agent's `findings.json` as written and validated, so a profile's template can render fields its schema adds beyond the shared ones. A profile whose Report is not a list of Findings writes `"findings": []` and renders its own structure from `data`; its template still treats that text as data.
 
 ## Considered Options
 
